@@ -1,4 +1,4 @@
-# Picky-internal
-Structural Variant Pipeline for Long Reads (Internal)
+# Picky
+Structural Variant Pipeline for Long Reads
 
 See Wiki for documentation.
