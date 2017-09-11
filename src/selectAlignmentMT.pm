@@ -2,7 +2,10 @@
 #
 # Picky - Structural Variants Pipeline for (ONT) long read
 #
-# Copyright (c) 2016-2017  Chee-Hong WONG  The Jackson Laboratory
+# Created Aug 16, 2016
+# Copyright (c) 2016-2017  Chee-Hong WONG
+#                          Genome Technologies
+#                          The Jackson Laboratory
 #
 #####
 
@@ -30,7 +33,7 @@ our @EXPORT = qw(runSelectRepresentativeAlignments);
 use utilities;
 use Thread;
 use Thread::Queue; # 3.12;
-# WORKAROUND#1: added as institute does not have a proper multi-threaded Perl using Thread::Queue 3.12 !
+# WORKAROUND#1: added as substitute does not have a proper multi-threaded Perl using Thread::Queue 3.12 !
 use Thread::Semaphore;
 # END-WORKAROUND#1
 use PickerMT;
@@ -42,6 +45,71 @@ my $G_MIN_IDENTITY_VARIANCE = 55; # i.e. %= >=55%
 my $G_CACHE_FOLD = 10;
 #my $G_NUMBER_OF_WORKERS = 8;
 my $G_NUMBER_OF_WORKERS = 1; # for testing purposes
+
+my $G_USAGE = "
+$0 selectRep [--thread <numberOfThreads>] [--preload <preloadFold>]
+
+--thread INT   number of threads
+--preload INT  Fold of thread count to preload maf records
+";
+
+# STDIN for .maf stream
+# STDOUT for our .align stream
+# STDERR for our logging
+sub runSelectRepresentativeAlignments {
+	my $numberOfThreads = $G_NUMBER_OF_WORKERS;
+	my $preloadFold = $G_CACHE_FOLD;
+	my $help = 0;
+	
+	GetOptions (
+	"thread=i" => \$numberOfThreads,
+	"preload=i" => \$preloadFold,
+	"help!"        => \$help)
+	or die("Error in command line arguments\n$G_USAGE");
+	
+	die "$G_USAGE" if ($help);
+	
+	$numberOfThreads = $G_NUMBER_OF_WORKERS if ($numberOfThreads<1);
+
+	my $maxEG2 = $G_MAX_EG2; #Picker::getMaxEG2();
+	my $minIdentityPercent = $G_MIN_IDENTITY_VARIANCE; #Picker::getMinIdentityPercentage();
+	
+	my $startTime = time;
+	
+	my %qRequests = ();
+	my $qRequests = Thread::Queue->new();
+	$qRequests{qRequests} = $qRequests;
+	my $requestSlots = Thread::Semaphore->new($numberOfThreads * $preloadFold);
+	$qRequests{_hackSlots} = $requestSlots;
+	my $qResults = Thread::Queue->new();
+	
+	# start alignments writer thread
+	my $tWriter = Thread->new(\&writePickedAlignments, $qResults, $numberOfThreads);
+	
+	# start processor worker threads
+	for(my $i=0; $i<$numberOfThreads; ++$i) {
+		my $tPicker = Thread->new(\&handleAlignmentsPicking, \%qRequests, $qResults);
+	}
+	
+	# start maf record reader in current thread
+	readMAFRecords(\%qRequests, $maxEG2, $minIdentityPercent);
+	for(my $i=0; $i<$numberOfThreads; ++$i) {
+		$requestSlots->down(); # block until there is a free slot
+		$qRequests->enqueue("DONE");
+	}
+	
+	# producer is done, let's signal to all threads
+	
+	# wait for all threads to finish!
+	$_->join for threads->list;
+	
+	my $totalTime = time - $startTime;
+	printf STDERR "%s Total run time = %d secs\n", utilities::getTimeStamp(), $totalTime;
+	printf STDERR "%s %d .maf lines processed.\n", utilities::getTimeStamp(), $.;
+	
+	close STDOUT || die "Fail to close STDOUT\n$!\n";
+	close STDERR || die "Fail to close STDERR\n$!\n";
+}
 
 sub handleAlignmentsPicking {
 	my ($qRequests, $qResults) = @_;
@@ -63,10 +131,9 @@ sub handleAlignmentsPicking {
 			my $sline = shift @{$linesRef};
 			my $qline = shift @{$linesRef};
 			my $qualityLine = shift @{$linesRef};
-			my $currLine = shift @{$linesRef};
 
 			# let's parse the lines
-			utilities::parseMAFRecord ($aline, $sline, $qline, $qualityLine, \%alignment, $G_KEEPLINE, $currLine);
+			utilities::parseMAFRecordGenCigar ($aline, $sline, $qline, $qualityLine, \%alignment, $G_KEEPLINE);
 			
 			$currReadRef = $alignment{'read'} if (0==$i);
 			
@@ -90,7 +157,7 @@ sub handleAlignmentsPicking {
 }
 
 sub writePickedAlignments {
-	my ($qResults, $numberOfWorkers, $fhAlign, $fhLog) = @_;
+	my ($qResults, $numberOfWorkers) = @_;
 	
 	my $pendingDONE = $numberOfWorkers;
 	my %outOfOrderResults = ();
@@ -108,8 +175,8 @@ sub writePickedAlignments {
 			$outOfOrderResults{$result->{requestId}} = $result;
 			while (exists $outOfOrderResults{$expectedId}) {
 				my $currResult = $outOfOrderResults{$expectedId};
-				print $fhLog join("\n", @{$currResult->{logs}}), "\n" if (scalar(@{$currResult->{logs}})>0);
-				print $fhAlign join("\n", @{$currResult->{aligns}}), "\n" if (scalar(@{$currResult->{aligns}})>0);
+				print STDERR join("\n", @{$currResult->{logs}}), "\n" if (scalar(@{$currResult->{logs}})>0);
+				print join("\n", @{$currResult->{aligns}}), "\n" if (scalar(@{$currResult->{aligns}})>0);
 				delete $outOfOrderResults{$expectedId};
 				$expectedId++;
 			}
@@ -120,7 +187,7 @@ sub writePickedAlignments {
 }
 
 sub readMAFRecords {
-	my ($qRequests, $file, $maxEG2, $minIdentityPercent, $startId, $endId) = @_;
+	my ($qRequests, $maxEG2, $minIdentityPercent) = @_;
 	
 	my $startTime = time;
 	my $currQueryId = '';
@@ -128,11 +195,56 @@ sub readMAFRecords {
 	my $currAlignmentsRef = undef;
 	my $endTime = $startTime;
 	my $numAlignments = 0;
+	my $parseHeader = 1;
 	
 	my $serialNumber = 0;
-	open INFILE, "$file" || die "Fail to open $file\n$!\n";
-	while (<INFILE>) {
-		next if ('#' eq substr($_,0,1));
+	
+	while (<STDIN>) {
+		if ('#' eq substr($_,0,1)) {
+			if (0!=$parseHeader) {
+				# LAST version 755
+				#
+				# a=0 b=2 A=0 B=2 e=42 d=24 x=41 y=9 z=41 D=1e+06 E=174.743
+				# R=10 u=0 s=2 S=0 M=0 T=0 m=10 l=1 n=10 k=1 w=1000 t=0.910239 j=3 Q=1
+				# hg19.lastdb
+				# Reference sequences=25 normal letters=2861343702
+				# lambda=0.806198 K=0.071992
+				#
+				#    A  C  G  T
+				# A  1 -1 -1 -1
+				# C -1  1 -1 -1
+				# G -1 -1  1 -1
+				# T -1 -1 -1  1
+				#
+				# Coordinates are 0-based.  For - strand matches, coordinates
+				# in the reverse complement of the 2nd sequence are used.
+				#
+				# name start alnSize strand seqSize alignment
+				#
+				# batch 0
+				my $line = '';
+				do {
+					if (/LAST\s+version\s+(\d+)/i) {
+						my $version = $1;
+						printf "# \@PG_ID\t%s\n", 'lastal';
+						printf "# \@PG_PN\t%s\n", 'lastal';
+						printf "# \@PG_VN\t%s\n", $version;
+					} elsif (/\.lastdb/) {
+						chomp();
+						my $lastdb = $_; $lastdb =~ s/^#\s+//;
+						printf "# \@PG_DB\t%s\n", $lastdb;
+					} else {
+						# ignore
+					}
+					$_=<STDIN>;
+				} while ('#' eq substr($_,0,1));
+				print "# \@PG_END\n";
+				$parseHeader = 0;
+			} else {
+				# Query sequences=1669
+				next;
+			}
+		}
 		if (/^a\s+/) {
 			# let's process the block
 			# a score=1897 EG2=0 E=0
@@ -140,17 +252,13 @@ sub readMAFRecords {
 			# s WTD01:50183:2D:P:3:M:L13738        32 3791 +     13738 CCCAAGAAAAT
 			# q WTD01:50183:2D:P:3:M:L13738                            4/0825;7<=3
 			
-			my $currLine = $.;
-			
 			my %alignment = ();
 			my $aline = $_;
-			my $sline = <INFILE>;
-			my $qline = <INFILE>;
-			my $qualityLine = <INFILE>;
+			my $sline = <STDIN>;
+			my $qline = <STDIN>;
+			my $qualityLine = <STDIN>;
 			
 			my $queryId = utilities::getQueryIdValue ($qline);
-			next if ($queryId<$startId); # not at the read that we are interested
-			last if ($queryId>$endId); # not at the read that we are interested
 			
 			if ($currQueryId ne $queryId) {
 				# end of previous batch of alignment for the same read
@@ -175,12 +283,11 @@ sub readMAFRecords {
 			
 			$numAlignments++;
 			
-			push @{$currAlignmentsRef}, $aline, $sline, $qline, $qualityLine, $currLine;
+			push @{$currAlignmentsRef}, $aline, $sline, $qline, $qualityLine;
 		} else {
 			# do nothing
 		}
 	}
-	close INFILE;
 	if ('' ne $currQueryId) {
 		$endTime = time();
 		# process the batch before starting to work on new alignment
@@ -189,95 +296,6 @@ sub readMAFRecords {
 		$qRequests->{_hackSlots}->down(); # block until there is a free slot
 		$qRequests->{qRequests}->enqueue(\%pickRequest);
 	}
-}
-
-my $G_USAGE = "
-$0 selectRep --in <alignFile>
-
-  --in STR       .align file
-  --out STR      output filename prefix
-  --thread INT   number of threads
-  --preload INT  Fold of thread count to preload maf records
-  --start INT    First read id to be processed
-  --end INT      Last read id to be processed
-  --block INT    Number of reads to be processed
-";
-
-sub runSelectRepresentativeAlignments {
-	my $file = undef;
-	my $outfile = undef;
-	my %rangeMarker = (specified=>0, start=>0, end=>0, block=>0, label=>'');
-	my $numberOfThreads = $G_NUMBER_OF_WORKERS;
-	my $preloadFold = $G_CACHE_FOLD;
-
-	GetOptions (
-	"in=s"   => \$file,
-	"out=s"   => \$outfile,
-	"thread=i" => \$numberOfThreads,
-	"preload=i" => \$preloadFold,
-	"start=i" => \$rangeMarker{start},
-	"end=i" => \$rangeMarker{end},
-	"block=i" => \$rangeMarker{block})
-	or die("Error in command line arguments\n$G_USAGE");
-	
-	die "Fail to open $file\n" if (! -f $file);
-	
-	$numberOfThreads = $G_NUMBER_OF_WORKERS if ($numberOfThreads<1);
-	
-	if (!defined $outfile) {
-		$outfile = $file;
-		if ($outfile =~ /.maf$/) { $outfile =~ s/.maf$/.multiple/; }
-		else { $outfile .= '.multiple'; }
-	}
-	$outfile .= rangeMarker{'label'} if (0!=utilities::makeRange(\%rangeMarker));
-	
-	my $logfile = $outfile; $outfile .= '.align';
-	open my $fhAlign, ">$outfile" || die "Fail to open $outfile\n$!\n";
-	$fhAlign->autoflush(1);
-	print $fhAlign "# FILE=", $file, "\n";
-	
-	$logfile .= '.log';
-	open my $fhLog, ">$logfile" || die "Fail to open $logfile\n$!\n";
-	$fhLog->autoflush(1);
-
-	my $maxEG2 = $G_MAX_EG2; #Picker::getMaxEG2();
-	my $minIdentityPercent = $G_MIN_IDENTITY_VARIANCE; #Picker::getMinIdentityPercentage();
-	
-	my $startTime = time;
-	
-
-	my %qRequests = ();
-	my $qRequests = Thread::Queue->new();
-	$qRequests{qRequests} = $qRequests;
-	my $requestSlots = Thread::Semaphore->new($numberOfThreads * $preloadFold);
-	$qRequests{_hackSlots} = $requestSlots;
-	my $qResults = Thread::Queue->new();
-
-	# start alignments writer thread
-	my $tWriter = Thread->new(\&writePickedAlignments, $qResults, $numberOfThreads, $fhAlign, $fhLog);
-	
-	# start processor worker threads
-	for(my $i=0; $i<$numberOfThreads; ++$i) {
-		my $tPicker = Thread->new(\&handleAlignmentsPicking, \%qRequests, $qResults);
-	}
-	
-	# start maf record reader in current thread
-	readMAFRecords(\%qRequests, $file, $maxEG2, $minIdentityPercent, $rangeMarker{'start'}, $rangeMarker{'end'});
-	for(my $i=0; $i<$numberOfThreads; ++$i) {
-		$requestSlots->down(); # block until there is a free slot
-		$qRequests->enqueue("DONE");
-	}
-	
-	# producer is done, let's signal to all threads
-	
-	# wait for all threads to finish!
-	$_->join for threads->list;
-	
-	my $totalTime = time - $startTime;
-	printf $fhLog "%s Total run time = %d secs\n", utilities::getTimeStamp(), $totalTime;
-	
-	close $fhAlign;
-	close $fhLog;
 }
 
 1;

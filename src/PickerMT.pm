@@ -2,7 +2,10 @@
 #
 # Picky - Structural Variants Pipeline for (ONT) long read
 #
-# Copyright (c) 2016-2017  Chee-Hong WONG  The Jackson Laboratory
+# Created Aug 16, 2016
+# Copyright (c) 2016-2017  Chee-Hong WONG
+#                          Genome Technologies
+#                          The Jackson Laboratory
 #
 #####
 
@@ -27,8 +30,8 @@ use base 'Exporter';
 use utilities;
 
 
-# TODO: constants
-my @G_ReportCols = ('score', 'EG2', 'E', '=', '%=', 'X', '%X', 'D', '%D', 'I', '%I', 'qStart', 'qEnd', 'qStrand', 'qALen', 'q%', 'refId', 'refStart', 'refEnd', 'refStrand', 'refALen', 'line#');
+# constants
+my @G_ReportCols = ('score', 'EG2', 'E', '=', '%=', 'X', '%X', 'D', '%D', 'I', '%I', 'qStart', 'qEnd', 'qStrand', 'qALen', 'q%', 'refId', 'refStart', 'refEnd', 'refStrand', 'refALen', 'cigar');
 
 # TODO: needed
 my $G_MAX_EG2_READLEN = 1.0e-49; # this is for reasonable read length
@@ -93,7 +96,6 @@ sub getMinIdentityPercentage {
 #####
 
 sub printAlignments {
-	#my ($fh, $alignmentsRef, $prefix, $maxRows, $maxSubRows) = @_;
 	my ($linesRef, $alignmentsRef, $prefix, $maxRows, $maxSubRows) = @_;
     
     my $pprefix = ''; $pprefix = $prefix if (defined $prefix);
@@ -115,7 +117,8 @@ sub printAlignments {
         push @cols, sprintf("%.2f", $alignRef->{read}->{readalignlen}*100.0/$alignmentsRef->[0]->{read}->{readsize});
         grep { push @cols, $alignRef->{ref}->{$_}; } ('ref', 'refstart', 'refend', 'refstrand', 'refalignlen');
         
-        push @cols, $alignRef->{'line#'};
+		push @cols, $alignRef->{'read'}->{'cigar'};
+		
        
         # handle the prefix
         $cols[0] = $pprefix . (exists $alignRef->{category} ? $alignRef->{category} : ' ') . $cols[0];
@@ -831,7 +834,6 @@ sub _extendLine {
 }
 
 sub processAlignments {
-	#my ($currReadRef, $alignmentsRef, $unfilteredCounts, $ioTime, $fhAlign, $fhLog) = @_;
 	my ($currReadRef, $alignmentsRef, $unfilteredCounts, $ioTime, $alignLinesRef, $logLinesRef) = @_;
     
     my $startTime = time();
@@ -840,8 +842,7 @@ sub processAlignments {
     my %reportMetrics = ('#uf_aligns'=>$unfilteredCounts, '#aligns'=>$numOfAligns, '#seeds'=>0, '#nonseeds'=>0);
     # need local time for knowing how long the processing has been
     _appendLine(sprintf("%s Processing read %s (%d,%d)", utilities::getTimeStamp(), $currReadRef->{read}, $unfilteredCounts, $numOfAligns), $logLinesRef);
-    
-    
+	
     # cases that we are handling:
     # 1. there is no alignment
     # 2. there is only a single alignment

@@ -2,7 +2,10 @@
 #
 # Picky - Structural Variants Pipeline for (ONT) long read
 #
-# Copyright (c) 2016-2017  Chee-Hong WONG  The Jackson Laboratory
+# Created Aug 16, 2016
+# Copyright (c) 2016-2017  Chee-Hong WONG
+#                          Genome Technologies
+#                          The Jackson Laboratory
 #
 #####
 
@@ -71,12 +74,16 @@ sub runHashFastq {
 	my $pfile = undef;
 	my $ffile = undef;
 	my $outputPrefix = undef;
+	my $help = 0;
 	
 	GetOptions (
 	"pfile=s" => \$pfile,
 	"ffile=s"   => \$ffile,
 	"oprefix=s"   => \$outputPrefix,
-	) or die("Error in command line arguments\n$G_USAGE");
+	"help!" => \$help)
+	or die("Error in command line arguments\n$G_USAGE");
+	
+	die "$G_USAGE" if ($help);
 	
 	die "Please specify the output prefix\n$G_USAGE" if (!defined $outputPrefix);
 	die "Please specify either the pass or fail fastq file\n$G_USAGE" if (!defined $pfile && !defined $ffile);

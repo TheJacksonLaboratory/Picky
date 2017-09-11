@@ -2,7 +2,10 @@
 #
 # Picky - Structural Variants Pipeline for (ONT) long read
 #
-# Copyright (c) 2016-2017  Chee-Hong WONG  The Jackson Laboratory
+# Created Aug 16, 2016
+# Copyright (c) 2016-2017  Chee-Hong WONG
+#                          Genome Technologies
+#                          The Jackson Laboratory
 #
 #####
 
@@ -52,42 +55,47 @@ push @G_ReportLabels, 'score', 'EG2', 'E', 'Identity', 'IdentityP', 'Mismatch', 
 #####
 
 my $G_USAGE = "
-$0 callSV --in <alignFile> --fastq <fqFile> --genome <genomeFastaFile>
+$0 callSV --in <alignFile> --fastq <fqFile> --lastpara <last parameters> [--genome <genomeFastaFile> --removehomopolymerdeletion] [--sam] [--exlucde <chromosomeToExeclude> [--exlucde <anotherChromosomeToExeclude>]]
 
-  --in STR        .align file
+  --oprefix STR   prefix for output files
   --fastq STR     .fastq file
-  --genome STR    genome sequence in .fasta file
+  --lastpara STR  lastal parameters used
   --removehomopolymerdeletion
                   exclude DEL and INDEL possibly affected by homopolymer
+  --genome STR    genome sequence in .fasta file
   --sam           flag to output .sam file
-  --readseq       read sequenece to be output in .sam file
   --exclude STR   exclude SV invovling specified chromosome
-  --correctminus  flag to adjust for off-by-one error in .align file
+                  (specify each chromosome with --exclude individually)
 ";
 
 sub runCallStructuralVariants {
-	my $file = undef;
+	my $oprefix = undef;
 	my $fqfile = undef;
-	my $outfile = undef;
 	my $genome = undef;
 	my %genomeSequences = ();
 	my $G_removeHomopolymerDeletion = 0;
 	my $outputSam = 0;
+	my $lastpara = '-r1 -q1 -a0 -b2 -Q1'; # optional parameters -v -P28
 	my $G_readseq = 0;
 	my @G_excludeChrs = ();
 	my $G_excludeChrsRef = undef;
-	my $G_correctMinus = 0; # WCH: 20170216 - fix the off by 1 error in .align output by pick-maf.pl
+	my $help = 0;
 	
 	GetOptions (
-	"in=s"    => \$file,
-	"fastq=s" => \$fqfile,
-	"genome=s" => \$genome,
+	"oprefix=s"         => \$oprefix,
+	"fastq=s"      => \$fqfile,
+	"genome=s"     => \$genome,
 	"removehomopolymerdeletion" => \$G_removeHomopolymerDeletion,
-	"sam"     => \$outputSam,
-	"readseq"     => \$G_readseq,
-	"correctminus" => \$G_correctMinus,
-	"exclude=s" => \@G_excludeChrs)
+	"sam"         => \$outputSam,
+	"lastpara"     => \$lastpara,
+	"exclude=s"    => \@G_excludeChrs,
+	"help!"        => \$help)
 	or die("Error in command line arguments\n$G_USAGE");
+	
+	die "$G_USAGE" if ($help);
+	
+	die "Please specify the prefix for output files\n$G_USAGE" if (!defined $oprefix || '' eq $oprefix);
+	die "Please specify the fastq files\n$G_USAGE" if (!defined $fqfile || '' eq $fqfile);
 	
 	my %svParameters = ();
 	$svParameters{'_ctlc_min_sdiff'} = 1000000000;  # exclude from this study
@@ -114,97 +122,64 @@ sub runCallStructuralVariants {
 		$G_excludeChrsRef = \%excludeChrs;
 	}
 	
-	open INFILE, "$file" || die "Fail to open $file\n$!\n";
-	
-	$outfile = $file; $outfile =~ s/.align$// if ($outfile =~ /.align$/);
-	
-	my $prefixFile = $outfile;
-	$outfile .= '.profile.xls';
+	my $outfile = sprintf("%s.profile.xls", $oprefix);
 	open OUTP, ">$outfile" || die "Fail to open $outfile\n$!\n";
 	# for R, we have the first line as header
 	print OUTP join("\t", @G_ReportLabels), "\n";
 	
-	my $excludeFile = $prefixFile . '.profile.exclude';
+	my $excludeFile = sprintf("%s.profile.exclude", $oprefix);
 	open my $fhExclude, ">$excludeFile" || die "Fail to open $excludeFile\n$!\n";
-	
-	if (!defined $fqfile) {
-		my @bits = split(/\./,$file);
-		if (scalar(@bits)>2) {
-			$fqfile = sprintf("%s.%s.fastq", $bits[0], $bits[1]);
-		} elsif (scalar(@bits)>1) {
-			$fqfile = sprintf("%s.fastq", $bits[0]);
-		} else {
-			$fqfile = $file . '.fastq';
-		}
-	}
 	
 	# read the sequence
 	my %readSequences = ();
+	$G_readseq = 1 if (0!=$outputSam); # if we are writing SAM, we need the read sequence
 	utilities::loadReadFastqFile($fqfile, \%readSequences) if (0!=$G_readseq);
 
 	# load the genome sequences; need for homopolymer checking
-	utilities::loadGenomeFastaFile($genome, \%genomeSequences) if (defined $genome && '' ne $genome);
+	if ($G_removeHomopolymerDeletion) {
+		die "Please specify a genome sequence fasta file for homopolymer detection\n$G_USAGE" if (!defined $genome || '' eq $genome);
+		utilities::loadGenomeFastaFile($genome, \%genomeSequences);
+	} else {
+		if (defined $genome && '' ne $genome) {
+			print STDERR "Genome sequence fasta file is needed for homopolymer detection only.\n";
+		}
+	}
 	
 	my %svCallers = ();
 	my @svCallers = ();
 	my $svCallerRef; my $SVFile; my $SVType;
-	$SVType = 'TDSR'; $SVFile = sprintf("%s.profile.%s.xls", $prefixFile, $SVType); $svCallerRef = new SVTDSRCaller(\%svParameters, $SVFile);
+	$SVType = 'TDSR'; $SVFile = sprintf("%s.profile.%s.xls", $oprefix, $SVType); $svCallerRef = new SVTDSRCaller(\%svParameters, $SVFile);
 	push @svCallers, $svCallerRef; $svCallers{$SVType} = $svCallerRef;
-	$SVType = 'TDC'; $SVFile = sprintf("%s.profile.%s.xls", $prefixFile, $SVType); $svCallerRef = new SVTDCCaller(\%svParameters, $SVFile);
+	$SVType = 'TDC'; $SVFile = sprintf("%s.profile.%s.xls", $oprefix, $SVType); $svCallerRef = new SVTDCCaller(\%svParameters, $SVFile);
 	push @svCallers, $svCallerRef; $svCallers{$SVType} = $svCallerRef;
-	$SVType = 'CTLC'; $SVFile = sprintf("%s.profile.%s.xls", $prefixFile, $SVType); $svCallerRef = new SVCTLCCaller(\%svParameters, $SVFile);
+	$SVType = 'CTLC'; $SVFile = sprintf("%s.profile.%s.xls", $oprefix, $SVType); $svCallerRef = new SVCTLCCaller(\%svParameters, $SVFile);
 	push @svCallers, $svCallerRef; $svCallers{$SVType} = $svCallerRef;
-	$SVType = 'INV'; $SVFile = sprintf("%s.profile.%s.xls", $prefixFile, $SVType); $svCallerRef = new SVINVCaller(\%svParameters, $SVFile);
+	$SVType = 'INV'; $SVFile = sprintf("%s.profile.%s.xls", $oprefix, $SVType); $svCallerRef = new SVINVCaller(\%svParameters, $SVFile);
 	push @svCallers, $svCallerRef; $svCallers{$SVType} = $svCallerRef;
-	$SVType = 'DEL'; $SVFile = sprintf("%s.profile.%s.xls", $prefixFile, $SVType); $svCallerRef = new SVDELCaller(\%svParameters, $SVFile);
+	$SVType = 'DEL'; $SVFile = sprintf("%s.profile.%s.xls", $oprefix, $SVType); $svCallerRef = new SVDELCaller(\%svParameters, $SVFile);
 	push @svCallers, $svCallerRef; $svCallers{$SVType} = $svCallerRef;
-	$SVType = 'INS'; $SVFile = sprintf("%s.profile.%s.xls", $prefixFile, $SVType); $svCallerRef = new SVINSCaller(\%svParameters, $SVFile);
+	$SVType = 'INS'; $SVFile = sprintf("%s.profile.%s.xls", $oprefix, $SVType); $svCallerRef = new SVINSCaller(\%svParameters, $SVFile);
 	push @svCallers, $svCallerRef; $svCallers{$SVType} = $svCallerRef;
-	$SVType = 'INDEL'; $SVFile = sprintf("%s.profile.%s.xls", $prefixFile, $SVType); $svCallerRef = new SVINDELCaller(\%svParameters, $SVFile);
+	$SVType = 'INDEL'; $SVFile = sprintf("%s.profile.%s.xls", $oprefix, $SVType); $svCallerRef = new SVINDELCaller(\%svParameters, $SVFile);
 	push @svCallers, $svCallerRef; $svCallers{$SVType} = $svCallerRef;
-	$SVType = 'TTLC'; $SVFile = sprintf("%s.profile.%s.xls", $prefixFile, $SVType); $svCallerRef = new SVTTLCCaller(\%svParameters, $SVFile);
+	$SVType = 'TTLC'; $SVFile = sprintf("%s.profile.%s.xls", $oprefix, $SVType); $svCallerRef = new SVTTLCCaller(\%svParameters, $SVFile);
 	push @svCallers, $svCallerRef; $svCallers{$SVType} = $svCallerRef;
 	my $noneHandlerRef;
-	$SVType = 'NONE'; $SVFile = sprintf("%s.profile.%s.xls", $prefixFile, $SVType); $noneHandlerRef = new SVCaller(\%svParameters, $SVFile);
+	$SVType = 'NONE'; $SVFile = sprintf("%s.profile.%s.xls", $oprefix, $SVType); $noneHandlerRef = new SVCaller(\%svParameters, $SVFile);
 	
+	my $fhSam = undef;
+	my $fhBed = undef;
+	my $pg_id = 'lastal';
+	my $pg_pn = 'lastal';
+	my $pg_vn = '755';
+	my $pg_db = 'hg19.lastdb';
 	if (0!=$outputSam) {
-		my $samfile = $file;
-		$samfile .= '.profile.sam';
-		open OUTS, ">$samfile" || die "Fail to open $samfile\n$!\n";
-		# TODO: print the same file header!!!
-		# print OUTS "\@HD	VN:1.3	SO:coordinate\n";
-		print OUTS "\@HD	VN:1.3\n";
-		print OUTS "\@SQ	SN:chr1	LN:249250621\n";
-		print OUTS "\@SQ	SN:chr2	LN:243199373\n";
-		print OUTS "\@SQ	SN:chr3	LN:198022430\n";
-		print OUTS "\@SQ	SN:chr4	LN:191154276\n";
-		print OUTS "\@SQ	SN:chr5	LN:180915260\n";
-		print OUTS "\@SQ	SN:chr6	LN:171115067\n";
-		print OUTS "\@SQ	SN:chr7	LN:159138663\n";
-		print OUTS "\@SQ	SN:chr8	LN:146364022\n";
-		print OUTS "\@SQ	SN:chr9	LN:141213431\n";
-		print OUTS "\@SQ	SN:chr10	LN:135534747\n";
-		print OUTS "\@SQ	SN:chr11	LN:135006516\n";
-		print OUTS "\@SQ	SN:chr12	LN:133851895\n";
-		print OUTS "\@SQ	SN:chr13	LN:115169878\n";
-		print OUTS "\@SQ	SN:chr14	LN:107349540\n";
-		print OUTS "\@SQ	SN:chr15	LN:102531392\n";
-		print OUTS "\@SQ	SN:chr16	LN:90354753\n";
-		print OUTS "\@SQ	SN:chr17	LN:81195210\n";
-		print OUTS "\@SQ	SN:chr18	LN:78077248\n";
-		print OUTS "\@SQ	SN:chr19	LN:59128983\n";
-		print OUTS "\@SQ	SN:chr20	LN:63025520\n";
-		print OUTS "\@SQ	SN:chr21	LN:48129895\n";
-		print OUTS "\@SQ	SN:chr22	LN:51304566\n";
-		print OUTS "\@SQ	SN:chrX	LN:155270560\n";
-		print OUTS "\@SQ	SN:chrY	LN:59373566\n";
-		print OUTS "\@SQ	SN:chrM	LN:16571\n";
-		# TODO: we need to report the program info correctly!
-		print OUTS "\@PG	ID:lastal	PN:lastal	VN:755	CL:last-755/src/lastal -r1 -q1 -a0 -b2 -v -P 28 -Q 1 hg19.lastdb ",$fqfile,"\n";
+		my $samfile = sprintf("%s.profile.sam", $oprefix);
+		open $fhSam, ">$samfile" || die "Fail to open $samfile\n$!\n";
+		print $fhSam "\@HD	VN:1.3\n"; # "	SO:coordinate\n"
 		
-		my $bedfile = $file;
-		$bedfile .= '.profile.bed';
-		open OUTB, ">$bedfile" || die "Fail to open $bedfile\n$!\n";
+		my $bedfile = sprintf("%s.profile.bed", $oprefix);
+		open $fhBed, ">$bedfile" || die "Fail to open $bedfile\n$!\n";
 	}
 	
 	
@@ -218,7 +193,7 @@ sub runCallStructuralVariants {
 	my $numCols = 0;
 	my %seenReadIds = ();
 	my %statistics = ('TOTAL'=>0, 'POTENTIAL'=>0, '0-candidate'=>0, 'Single-candidate 0-fragment'=>0, 'Multi-candidates'=>0, 'Single-candidate single-fragment'=>0, 'Single-candidate multi-fragments multi-loci'=>0, 'Single-candidate multi-fragments single-locus'=>0);
-	while (<INFILE>) {
+	while (<STDIN>) {
 		chomp();
 		next if ('' eq $_);
 		
@@ -226,7 +201,7 @@ sub runCallStructuralVariants {
 			## 3196  WTD01:3:2D:P:3:M:L3196  (X)
 			## score EG2     E       =       %=      X       %X      D       %D      I       %I      qStart  qEnd    qStrand qALen   q%      refId   refStart        refEnd  refStrand       refALen
 			
-			# TODO: parse for some information
+			# parse for some information
 			my $afterComment = substr($_, 2);
 			if ($afterComment =~ /^score\s*/) {
 				# '# score '
@@ -238,7 +213,7 @@ sub runCallStructuralVariants {
 			} elsif ($afterComment =~ /^\d+/) {
 				# '# 3196'
 				### check the results
-				my $line = $_; profileResults ($readRef, $G_excludeChrsRef, \%svCallers, \@svCallers, $noneHandlerRef, $outputSam, \%seenReadIds, \%statistics, *OUTS, $fhExclude); $_ = $line; # 'cos classifyResult perform file read operation
+				my $line = $_; profileResults ($readRef, $G_excludeChrsRef, \%svCallers, \@svCallers, $noneHandlerRef, $outputSam, \%seenReadIds, \%statistics, $fhSam, $fhExclude, $fhBed); $_ = $line; # 'cos classifyResult perform file read operation
 				
 				$_ =~ s/^#\s+//;
 				my @bits = split(/\t/, $_);
@@ -255,24 +230,49 @@ sub runCallStructuralVariants {
 					delete $readSequences{$readRef->{read}};
 				}
 				@candidates = ();
-			} elsif ($afterComment =~ /^FILE=/) {
-				my $newSrcFile = $';
-				if (!defined $SRCFILE) {
-					$SRCFILE = $newSrcFile;
-					open INSRC, "$SRCFILE" || die "Fail to open $SRCFILE\n$!\n";
-				} else {
-					if ($SRCFILE ne $newSrcFile) {
-						$SRCFILE = $newSrcFile;
-						open INSRC, "$SRCFILE" || die "Fail to open $SRCFILE\n$!\n";
+			} elsif ($afterComment =~ /^\@PG\_/) {
+				# FILE=WTD09.2D.subset.v755.hg19.maf
+				# @PG_ID        lastal
+				# @PG_PN        lastal
+				# @PG_VN        755
+				# @PG_DB        hg19.lastdb
+				# @PG_END
+				do {
+					my @pgs = split(/\s+/, $afterComment);
+					if ('@PG_ID' eq $pgs[0]) {
+						$pg_id = $pgs[1];
+					} elsif ('@PG_PN' eq $pgs[0]) {
+						$pg_pn = $pgs[1];
+					} elsif ('@PG_VN' eq $pgs[0]) {
+						$pg_vn = $pgs[1];
+					} elsif ('@PG_DB' eq $pgs[0]) {
+						$pg_db = $pgs[1];
+					} else {
+						print $fhExclude "Unrecognized \@PG tag\n\t", $_, "\n";
 					}
+					$_ = <STDIN>; chomp();
+					$afterComment = '';
+					$afterComment = substr($_, 2) if ('# ' eq substr($_, 0, 2));
+				} while ($afterComment!~/^\@PG_END/);
+				
+				die "Please specify the lastal database used for the alignment process." if (!defined $pg_db);
+				my $lastdbPrefix = $pg_db;
+				$lastdbPrefix =~ s/\.lastdb$// if ($lastdbPrefix =~ /\.lastdb$/);
+				my $lastdbSeqDic = $lastdbPrefix . '.seq.dict';
+				die "Lastal database dictionary '$lastdbSeqDic' does not exist. $G_USAGE" if (! -f $lastdbSeqDic);
+				open SEQDICT, $lastdbSeqDic || die "Fail to open $lastdbSeqDic\n$!\n";
+				while (<SEQDICT>) {
+					print $fhSam $_;
 				}
-				print $fhExclude $_, "\n";
+				close SEQDICT;
+				# TODO: have to allow user to specify this information as aligner may be other than last
+				printf $fhSam "\@PG\tID:%s\tPN:%s\tVN:%s\tCL:lastal %s %s %s\n", $pg_id, $pg_pn, $pg_vn, $lastpara, $pg_db, $fqfile;
 			} else {
 				print $fhExclude "Unrecognized header1:\n\t$_";
 			}
 			
 		} elsif ('## ' eq substr($_, 0, 3)) {
-			# TODO: ignore, section can be ignore
+			# ignore, section can be ignore
 			print $fhExclude "Unrecognized header2:\n\t$_";
 		} elsif ('### ' eq substr($_, 0, 4)) {
 			#### candidate#1/5
@@ -328,10 +328,6 @@ sub runCallStructuralVariants {
 			for(my $i=0; $i<$readRef->{numCols}; ++$i) {
 				$align{$readRef->{cols}->[$i]} = $bits[$i];
 			}
-			if (0!=$G_correctMinus) {
-				# need to correct the off-by-1 problem
-				$align{qStart}++ if ('-' eq $align{refStrand});
-			}
 			if ($bits[0]=~/^\-/) {
 				if (defined $candidateLastRowRef) {
 					$align{$readRef->{cols}->[0]} =~ s/^\-//;
@@ -368,15 +364,13 @@ sub runCallStructuralVariants {
 	}
 	# classify the candidates before proceeding
 	###
-	profileResults ($readRef, $G_excludeChrsRef, \%svCallers, \@svCallers, $noneHandlerRef, $outputSam, \%seenReadIds, \%statistics, *OUTS, $fhExclude);
+	profileResults ($readRef, $G_excludeChrsRef, \%svCallers, \@svCallers, $noneHandlerRef, $outputSam, \%seenReadIds, \%statistics, $fhSam, $fhExclude, $fhBed);
 	
 	# release resources no longer in use
 	%genomeSequences = (); # free up large memory
-	close INFILE;
 	%svCallers = (); @svCallers = (); $noneHandlerRef = undef;
-	close INSRC if (defined $SRCFILE);
 	close OUTP;
-	if (0!=$outputSam) { close OUTS; close OUTB; }
+	if (0!=$outputSam) { close $fhSam; close $fhBed; }
 	
 	####
 	# let's report
@@ -463,10 +457,10 @@ sub printProfile {
 }
 
 sub printSAM {
-    my ($fh, $readid, $readseq, $readqual, $readsize, $marker, $candidateRef, $category, $numCandidates) = @_;
+    my ($fh, $readid, $readseq, $readqual, $readsize, $marker, $candidateRef, $category, $numCandidates, $fhBed) = @_;
     
     # $category = {., MC, SCSF, SCMFML, SCMFSL}
-    # SAM record need to be orderedby coordinates
+    # SAM record need to be ordered by coordinates
     my $alignmentsRef = undef;
     my $numRows = 0;
     if (defined $candidateRef) {
@@ -497,10 +491,7 @@ sub printSAM {
     }
     
     ### SA:Z:chr7,94283306,+,8000S7107M1664S,0,0;chr7,94289306,+,14195S1664M,0,0
-    #my $KEY_STRAND = 'qStrand';
-    my $KEY_STRAND = 'refStrand';
     my $repSA = '';
-    my $repStrand = '';
     my $repCigar = '';
     #if ($numRows>1) {
     if ($numRows>=1) {
@@ -508,22 +499,20 @@ sub printSAM {
         # TODO: mapq, nm
         my $mapq = 60;
         my $nm = 0;
-        $repStrand = $alignRef->{$KEY_STRAND};
-        #$repCigar = getCIGARFromBits($alignRef->{'readcigar'}, '-' eq $repStrand ?1:0);
-        $repCigar = getCIGARFromBits($alignRef->{'readcigar'}, '-' eq $repStrand ?1:0);
-        my @bits = ($alignRef->{'refId'}, $alignRef->{'refStart'}+1, $repStrand, $repCigar, $mapq, $nm);
+		$repCigar = $alignRef->{'cigar'};
+        my @bits = ($alignRef->{'refId'}, $alignRef->{'refStart'}+1, $alignRef->{refStrand}, $repCigar, $mapq, $nm);
         $repSA = join(',', @bits);
     }
-    my $mapq = 60;
+	my $mapq = 60; # TODO: how do we determine the mapq w.r.t. EG2?
     $mapq = 0 if ('MC' eq $category || 'SCMFML' eq $category);
     for(my $i=0; $i<$numRows; ++$i) {
         my $alignRef = $alignmentsRef->[$i];
         
         my @cols = ();
         push @cols, $readid;
-        #TODO: flag
+        #flag
         my $flag = 0;
-        if ('-' eq $alignRef->{$KEY_STRAND}) {
+        if ('-' eq $alignRef->{refStrand}) {
             $flag |= 0x10; # reverse
         }
         if ($i>0) {
@@ -538,24 +527,22 @@ sub printSAM {
         if (0==$i) {
             $cigar = $repCigar;
         } else {
-            #$cigar = getCIGARFromBits($alignRef->{'readcigar'}, '-' eq $alignRef->{'qStrand'}?1:0);
-            $cigar = getCIGARFromBits($alignRef->{'readcigar'}, '-' eq $alignRef->{$KEY_STRAND}?1:0);
+			$repCigar = $alignRef->{'cigar'};
         }
         push @cols, $cigar;
-        #TODO: rnext
+        #rnext
         my $rnext = '*';
         push @cols, $rnext;
-        #TODO: pnext
+        #pnext
         my $pnext = 0;
         push @cols, $pnext;
-        #TODO: tlen
+        #tlen
         my $tlen = $readsize;
         push @cols, $tlen;
-        #TODO: seq
+        #seq
         my $seq = '*';
         if ('' ne $readseq) {
-            if ('-' eq $alignRef->{$KEY_STRAND}) {
-                ### TODO: check if we need to reverse complement for '-v' strand mapping
+            if ('-' eq $alignRef->{refStrand}) {
                 $seq = reverse $readseq;
                 $seq =~ tr/ACGTNacgtn/TGCANtgcan/;
             } else {
@@ -563,13 +550,11 @@ sub printSAM {
             }
         }
         push @cols, $seq;
-        #TODO: quality
+        #quality
         my $quality = ('' eq $readqual) ? '*' : $readqual;
         push @cols, $quality;
-        
-        
-        # TODO: WCH: FIXME:
-        # have to subgroup those similar alignments
+		
+        # TODO: to provide more information in SAM for these subgroups of similar alignments
         if (exists $alignRef->{'samereadspan'}) {
             my $numSubRows = scalar(@{$alignRef->{'samereadspan'}});
             $numSubRows = $alignRef->{'#samereadspan'} if ($numSubRows<$alignRef->{'#samereadspan'});
@@ -583,7 +568,7 @@ sub printSAM {
             $numSubRows = $alignRef->{'#similar'} if ($numSubRows<$alignRef->{'#similar'});
         }
         
-        # TODO: need to report the evalue for making sense of results
+        # need to report the evalue for making sense of results
         # %Id, q%, score, EG2
         # zi:f:%Id
         # zq:f:q%
@@ -612,9 +597,8 @@ sub printSAM {
                     # TODO: mapq, nm
                     my $mapq = 60;
                     my $nm = 0;
-                    #my $cigar = getCIGARFromBits($fragAlignRef->{'readcigar'}, '-' eq $fragAlignRef->{'qStrand'}?1:0);
-                    my $cigar = getCIGARFromBits($fragAlignRef->{'readcigar'}, '-' eq $fragAlignRef->{$KEY_STRAND}?1:0);
-                    my @bits = ($fragAlignRef->{'refId'}, $fragAlignRef->{'refStart'}+1, $fragAlignRef->{$KEY_STRAND}, $cigar, $mapq, $nm);
+					my $cigar = $cigar = $fragAlignRef->{'cigar'};
+                    my @bits = ($fragAlignRef->{'refId'}, $fragAlignRef->{'refStart'}+1, $fragAlignRef->{refStrand}, $cigar, $mapq, $nm);
                     push @fragments, join(',', @bits);
                 }
                 push @cols, 'SA:Z:'.join(";", @fragments);
@@ -634,210 +618,12 @@ sub printSAM {
 		my $mapq = 60;
 		# bed format is (start, end]
 		@cols = ($alignRef->{'refId'}, $alignRef->{'refStart'}, $alignRef->{'refEnd'}, $readid.'_f'.($i+1), $mapq, , $alignRef->{'refStrand'}, $marker);
-		print OUTB join("\t", @cols), "\n";
-    }
-}
-
-sub parseMAFRecordForCigar {
-    my ($aline, $sline, $qline, $qualityLine, $alignRef) = @_;
-    
-    # let's process the block
-    # a score=1897 EG2=0 E=0
-    # s chr6                        160881684 3801 + 171115067 CCCAAGAAAAC
-    # s WTD01:50183:2D:P:3:M:L13738        32 3791 +     13738 CCCAAGAAAAT
-    # q WTD01:50183:2D:P:3:M:L13738                            4/0825;7<=3
-    
-    %{$alignRef} = ();
-    
-    # work on ^a line
-    chomp($aline);
-    my ($line) = $aline =~ /^a\s+(.*)/;
-    foreach my $keyValue (split(/\s+/, $line)) {
-        my ($key, $value) = split(/\=/, $keyValue);
-        $alignRef->{$key} = $value;
-    }
-    
-    # work on ^s line
-    chomp($sline);
-    my @bits = split(/\s+/, $sline);
-    my %ref=();
-    $ref{'ref'} = $bits[1];
-    $ref{'refstart'} = int($bits[2]); # it is 0-based
-    $ref{'refalignlen'} = int($bits[3]);
-    $ref{'refstrand'} = $bits[4];
-    $ref{'refsize'} = int($bits[5]);
-    $ref{'refseq'} = $bits[6];
-    #my $sbases = $bits[6]; $sbases =~ s/\-//g; $ref{'refend'} = $ref{'refstart'} + length($sbases); # start is 0-based
-    $ref{'refend'} = $ref{'refstart'} + $ref{'refalignlen'}; # start is 0-based
-    $alignRef->{'ref'} = \%ref;
-    
-    # work on ^s line
-    chomp($qline);
-    @bits = split(/\s+/, $qline);
-    my %read=();
-    $read{'read'} = $bits[1];
-    $read{'readstart'} = int($bits[2]); # it is 0-based
-    $read{'readalignlen'} = int($bits[3]);
-    $read{'readstrand'} = $bits[4];
-    $read{'readsize'} = int($bits[5]);
-    $read{'readseq'} = $bits[6];
-    #my $qbases = $bits[6]; $qbases =~ s/\-//g; $read{'readend'} = $read{'readstart'} + length($qbases); # start is 0-based
-    $read{'readend'} = $read{'readstart'} + $read{'readalignlen'}; # start is 0-based
-    $alignRef->{'read'} = \%read;
-    
-    #####
-    # we need to make read as the reference '+' coordinates for easier assembly later
-    if ('-' eq $read{'readstrand'}) {
-        $ref{'refstrand'} = '-';
-        $read{'readstrand'} = '+';
-        
-        $read{'readstart'} = $read{'readsize'} - ($read{'readstart'} + $read{'readalignlen'}); # start is 0-based
-        $read{'readend'} = $read{'readstart'} + $read{'readalignlen'}; # start is 0-based
-        
-        # NOTE: we do not reverse complement the sequences as the profile computation is the same
-        #       however, the CIGAR generation should be taken care of
-        $ref{'refseq'} = reverse $ref{'refseq'};
-        $read{'readseq'} = reverse $read{'readseq'};
-    }
-    
-    # TODO: generate the CIGAR string
-    # TODO: confirm the recording in MAF format for -ve strand!!!
-    my @cigar = ();
-    generateCIGAR($ref{'refseq'}, $read{'readseq'}, $read{'readstart'}, $read{'readsize'}, $read{'readstrand'}, \@cigar);
-    $read{'readcigar'} = \@cigar;
-    
-    # work on ^q line
-    chomp($qualityLine);
-    @bits = split(/\s+/, $qualityLine);
-    $read{'readquality'} = $bits[2];
-    
-}
-
-sub getCIGARFromBits {
-    my ($cigarRef, $reverse) = @_;
-    my $cigar = '';
-    if (defined $reverse && 0!=$reverse) {
-        grep { $cigar .= $_->{count}.$_->{type} } reverse @{$cigarRef};
-    } else {
-        grep { $cigar .= $_->{count}.$_->{type} } @{$cigarRef};
-    }
-    return $cigar;
-}
-
-sub generateCIGAR {
-    my ($refSeq, $querySeq, $qStart, $qSize, $qStrand, $cigarRef) = @_;
-    
-    die "Reference length (",length($refSeq),") != Query length (",length($querySeq),")\n" if (length($refSeq)!=length($querySeq));
-    
-    # WCH: 20170215, qStart is passed as 0-based
-	# $qStart;
-    
-    my @cigarBits = ();
-    if ($qStart>0) {
-        # there is soft clipping needed
-        push @cigarBits, {type=>'S', count=>$qStart};
-    }
-    my $type = ''; my $count = 0;
-    my $currType = '';
-    my $endPos = $qStart;
-    for(my $i=0; $i<length($refSeq); $i++) {
-        my $refbase = substr($refSeq, $i, 1);
-        my $querybase = substr($querySeq, $i, 1);
-        
-        if ('-' eq $refbase) {
-            if ('-' eq $querybase) {
-                # R:-,Q:-
-                die "Both reference and query contain '-' @ ", $i, "\n";
-            } else {
-                # R:-,Q:[ACGT]
-                $currType = 'I';
-                $endPos++;
-            }
-        } else {
-            if ('-' eq $querybase) {
-                # R:[ACGT],Q:-
-                $currType = 'D';
-            } else {
-                # R:[ACGT],Q:[ACGT]
-                if ((lc $refbase) eq (lc $querybase)) {
-                    $currType = '=';
-                } else {
-                    $currType = 'X';
-                }
-                $endPos++;
-            }
-        }
-        
-        if ($currType eq $type) {
-            $count++;
-        } else {
-            # need to flush
-            push @cigarBits, {type=>$type, count=>$count} if ($type ne '');
-            # reset to new type
-            $type = $currType; $count = 1;
-        }
-    }
-    # last information is not flushed yet
-    push @cigarBits, {type=>$type, count=>$count} if ($type ne '');
-    
-    # just in case we have clipping at the right end
-    my $remaining = $qSize - $endPos;
-    push @cigarBits, {type=>'S', count=>$remaining} if ($remaining>0);
-    
-    @{$cigarRef} = (); push @{$cigarRef}, @cigarBits;
-}
-
-sub ReadMAFRecord {
-    my ($alignmentsRef) = @_;
-    
-    # work on a single record
-    # TODO: logic to start from the beginning of the file if necessary
-    my $wanted = $alignmentsRef->{'line#'};
-    while (<INSRC>) {
-        my $linenumber = $.;
-        if ($linenumber==$wanted) {
-            # let's process the record!!!
-            my $aline = $_;
-            my $sline = <INSRC>;
-            my $qline = <INSRC>;
-            my $qualityLine = <INSRC>;
-            
-			my $queryId = utilities::getQueryIdValue ($qline);
-            my %alignment = ();
-            parseMAFRecordForCigar ($aline, $sline, $qline, $qualityLine, \%alignment);
-        
-            $alignmentsRef->{refseq} = $alignment{ref}->{refseq};
-            $alignmentsRef->{readseq} = $alignment{read}->{readseq};
-            $alignmentsRef->{readcigar} = $alignment{read}->{readcigar};
-            $alignmentsRef->{readquality} = $alignment{read}->{readquality};
-            
-            last;
-        } elsif ($linenumber>$wanted) {
-            # past what we want!
-            die "Wanted line#", $wanted, " but already at line#", $linenumber, "!\n!\t$_\n", Dumper($alignmentsRef);
-        }
-    }
-}
-
-sub LoadMAFRecord {
-    my ($alignmentsRef) = @_;
-    
-    # order the line number of the records
-    # read each of them the sequences
-    # compute the CIGAR base on that
-    my @lineOrders = ();
-    for(my $i=0; $i<scalar(@{$alignmentsRef}); ++$i) {
-        push @lineOrders, {order=>$i, ref=>$alignmentsRef->[$i]};
-    }
-    @lineOrders = sort { int($a->{ref}->{'line#'}) <=> int($b->{ref}->{'line#'})} @lineOrders;
-    
-    foreach my $lineOrderRef (@lineOrders) {
-        ReadMAFRecord($lineOrderRef->{ref});
+		print $fhBed join("\t", @cols), "\n";
     }
 }
 
 sub profileResults {
-    my ($readRef, $excludedChrsRef, $namedSVCallersRef, $orderedSVCallersRef, $noneHandlerRef, $outputSam, $seenReadIdsRef, $statisticsRef, $fhSam, $fhExclude) = @_;
+    my ($readRef, $excludedChrsRef, $namedSVCallersRef, $orderedSVCallersRef, $noneHandlerRef, $outputSam, $seenReadIdsRef, $statisticsRef, $fhSam, $fhExclude, $fhBed) = @_;
     
     return if (!defined $readRef);
     
@@ -854,25 +640,13 @@ sub profileResults {
     if (0==$numCandidates) {
         $statisticsRef->{'0-candidate'}++;
         print $fhExclude "# ", $readRef->{read}, " ", $numCandidates, " candidate\n";
-        # TODO: write sam file as unmapped
-        if (0!=$outputSam) {
-            # there is nothing to load, it unmapped
-            #LoadMAFRecord($readRef->{candidates}->[0]);
-            printSAM ($fhSam, $readRef->{read}, $readRef->{readseq}, $readRef->{readqual}, $readRef->{readsize}, '', undef, '.', $numCandidates);
-        }
+		printSAM ($fhSam, $readRef->{read}, $readRef->{readseq}, $readRef->{readqual}, $readRef->{readsize}, '', undef, '.', $numCandidates, $fhBed) if (0!=$outputSam);
         return;
     }
     if ($numCandidates>1) {
         $statisticsRef->{'Multi-candidates'}++;
-        # TODO: DO NOT?? write sam file as multi-mapped
-        # TODO: DO NOT?? write the first candidate
         printProfile (*OUTP, $readRef, $readRef->{cols}, $readRef->{candidates}->[0], 'MC', '', -1);
-        if (0!=$outputSam) {
-            # Need to load for cigar string
-            LoadMAFRecord($readRef->{candidates}->[0]);
-            # TODO: write multi-mapped as mapq=0
-            printSAM ($fhSam, $readRef->{read}, $readRef->{readseq}, $readRef->{readqual}, $readRef->{readsize}, '', $readRef->{candidates}->[0], 'MC', $numCandidates);
-        }
+		printSAM ($fhSam, $readRef->{read}, $readRef->{readseq}, $readRef->{readqual}, $readRef->{readsize}, '', $readRef->{candidates}->[0], 'MC', $numCandidates, $fhBed) if (0!=$outputSam);
         return;
     }
 
@@ -881,26 +655,15 @@ sub profileResults {
     if (0==$numFragments) {
         $statisticsRef->{'Single-candidate 0-fragment'}++;
         print $fhExclude "# ", $readRef->{read}, " ", 0, " candidate\n";
-        # write sam file as unmapped
-        if (0!=$outputSam) {
-            # there is nothing to load, it unmapped
-            #LoadMAFRecord($readRef->{candidates}->[0]);
-            printSAM ($fhSam, $readRef->{read}, $readRef->{readseq}, $readRef->{readqual}, $readRef->{readsize}, '', undef, '.', $numCandidates);
-        }
+		printSAM ($fhSam, $readRef->{read}, $readRef->{readseq}, $readRef->{readqual}, $readRef->{readsize}, '', undef, '.', $numCandidates, $fhBed) if (0!=$outputSam);
         return;
     }
     if (1==$numFragments) {
         # there is no SV here
         $statisticsRef->{'Single-candidate single-fragment'}++;
-        # write sam file
-        # write the candidate
         printProfile (*OUTP, $readRef, $readRef->{cols}, $readRef->{candidates}->[0], 'SCSF', '', -1);
-        if (0!=$outputSam) {
-            # Need to load for cigar string
-            LoadMAFRecord($readRef->{candidates}->[0]);
-            # mapq = 60 given it is single-fragment
-            printSAM ($fhSam, $readRef->{read}, $readRef->{readseq}, $readRef->{readqual}, $readRef->{readsize}, '', $readRef->{candidates}->[0], 'SCSF', $numCandidates);
-        }
+		# mapq = 60 given it is single-fragment
+		printSAM ($fhSam, $readRef->{read}, $readRef->{readseq}, $readRef->{readqual}, $readRef->{readsize}, '', $readRef->{candidates}->[0], 'SCSF', $numCandidates, $fhBed) if (0!=$outputSam);
         return;
     }
     
@@ -936,15 +699,9 @@ sub profileResults {
     if (0!=$multiFragments) {
         # multi-loci
         $statisticsRef->{'Single-candidate multi-fragments multi-loci'}++;
-        # write sam file as multi-mapped
-        # write the first candidate
+        # write sam file as multi-mapped (first candidate)
         printProfile (*OUTP, $readRef, $readRef->{cols}, $readRef->{candidates}->[0], 'SCMFML', join(",", @countCigar), -1);
-        if (0!=$outputSam) {
-            # Need to load for cigar string
-            LoadMAFRecord($readRef->{candidates}->[0]);
-            # TODO: write multi-mapped as mapq=0
-            printSAM ($fhSam, $readRef->{read}, $readRef->{readseq}, $readRef->{readqual}, $readRef->{readsize}, '', $readRef->{candidates}->[0], 'SCMFML', $numCandidates);
-        }
+		printSAM ($fhSam, $readRef->{read}, $readRef->{readseq}, $readRef->{readqual}, $readRef->{readsize}, '', $readRef->{candidates}->[0], 'SCMFML', $numCandidates, $fhBed) if (0!=$outputSam);
         return;
     }
 
@@ -969,15 +726,9 @@ sub profileResults {
     }
 	$noneHandlerRef->writeSVList($readRef, $readRef->{candidates}->[0]) if (0==scalar(@SVs));
 	
-    # write sam file
-    # write the candidate
+    # write potential SV candidates sam file
     printProfile (*OUTP, $readRef, $readRef->{cols}, $readRef->{candidates}->[0], 'SCMFSL', $marker, $labelIndicator);
-    if (0!=$outputSam) {
-        # Need to load for cigar string
-        LoadMAFRecord($readRef->{candidates}->[0]);
-        # TODO: write multi-mapped as mapq=0
-        printSAM ($fhSam, $readRef->{read}, $readRef->{readseq}, $readRef->{readqual}, $readRef->{readsize}, $marker, $readRef->{candidates}->[0], 'SCMFSL', $numCandidates);
-    }
+	printSAM ($fhSam, $readRef->{read}, $readRef->{readseq}, $readRef->{readqual}, $readRef->{readsize}, $marker, $readRef->{candidates}->[0], 'SCMFSL', $numCandidates, $fhBed) if (0!=$outputSam);
 }
 
 ##### internal functions

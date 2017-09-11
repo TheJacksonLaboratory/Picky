@@ -2,7 +2,10 @@
 #
 # Picky - Structural Variants Pipeline for (ONT) long read
 #
-# Copyright (c) 2016-2017  Chee-Hong WONG  The Jackson Laboratory
+# Created Aug 16, 2016
+# Copyright (c) 2016-2017  Chee-Hong WONG
+#                          Genome Technologies
+#                          The Jackson Laboratory
 #
 #####
 

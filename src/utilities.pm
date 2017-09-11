@@ -2,7 +2,10 @@
 #
 # Picky - Structural Variants Pipeline for (ONT) long read
 #
-# Copyright (c) 2016-2017  Chee-Hong WONG  The Jackson Laboratory
+# Created Aug 16, 2016
+# Copyright (c) 2016-2017  Chee-Hong WONG
+#                          Genome Technologies
+#                          The Jackson Laboratory
 #
 #####
 
@@ -70,8 +73,10 @@ sub getQueryIdValue {
 	
 	chomp($qline);
 	my @bits = split(/\s+/, $qline);
-	@bits = split(/:/, $bits[1]);
-	return int($bits[1]);
+	#WCH: gave up internal serial run id to work with PacBio for now
+	#@bits = split(/:/, $bits[1]);
+	#return int($bits[1]);
+	return $bits[1];
 }
 
 sub getTimeStamp {
@@ -153,7 +158,7 @@ sub _profileTwoSeqs {
 }
 
 sub parseMAFRecord {
-	my ($aline, $sline, $qline, $qualityLine, $alignRef, $keepline, $currLine) = @_;
+	my ($aline, $sline, $qline, $qualityLine, $alignRef, $keepline) = @_;
 	
 	# let's process the block
 	# a score=1897 EG2=0 E=0
@@ -164,7 +169,6 @@ sub parseMAFRecord {
 	my $recordLine = (defined $keepline) ? $keepline : 0;
 	
 	%{$alignRef} = ();
-	$alignRef->{'line#'} = $currLine;
 	
 	# work on ^a line
 	chomp($aline);
@@ -227,7 +231,170 @@ sub parseMAFRecord {
 	push @{$alignRef->{lines}}, $qualityLine if (0!=$recordLine);
 	
 	
-	# TODO: clear sequence for easier visualization
+	# clear sequences to reduce memory consumption and easier debugging
+	delete $ref{'refseq'};
+	delete $read{'readseq'};
+}
+
+sub generateCIGAR {
+	my ($refSeq, $querySeq, $qStart, $qSize, $qStrand, $cigarRef) = @_;
+	
+	die "Reference length (",length($refSeq),") != Query length (",length($querySeq),")\n" if (length($refSeq)!=length($querySeq));
+	
+	# WCH: 20170215, qStart is passed as 0-based
+	# $qStart;
+	
+	my @cigarBits = ();
+	if ($qStart>0) {
+		# there is soft clipping needed
+		push @cigarBits, {type=>'S', count=>$qStart};
+	}
+	my $type = ''; my $count = 0;
+	my $currType = '';
+	my $endPos = $qStart;
+	for(my $i=0; $i<length($refSeq); $i++) {
+		my $refbase = substr($refSeq, $i, 1);
+		my $querybase = substr($querySeq, $i, 1);
+		
+		if ('-' eq $refbase) {
+			if ('-' eq $querybase) {
+				# R:-,Q:-
+				die "Both reference and query contain '-' @ ", $i, "\n";
+			} else {
+				# R:-,Q:[ACGT]
+				$currType = 'I';
+				$endPos++;
+			}
+		} else {
+			if ('-' eq $querybase) {
+				# R:[ACGT],Q:-
+				$currType = 'D';
+			} else {
+				# R:[ACGT],Q:[ACGT]
+				if ((lc $refbase) eq (lc $querybase)) {
+					$currType = '=';
+				} else {
+					$currType = 'X';
+				}
+				$endPos++;
+			}
+		}
+		
+		if ($currType eq $type) {
+			$count++;
+		} else {
+			# need to flush
+			push @cigarBits, {type=>$type, count=>$count} if ($type ne '');
+			# reset to new type
+			$type = $currType; $count = 1;
+		}
+	}
+	# last information is not flushed yet
+	push @cigarBits, {type=>$type, count=>$count} if ($type ne '');
+	
+	# just in case we have clipping at the right end
+	my $remaining = $qSize - $endPos;
+	push @cigarBits, {type=>'S', count=>$remaining} if ($remaining>0);
+	
+	@{$cigarRef} = (); push @{$cigarRef}, @cigarBits;
+}
+
+sub getCIGARFromBits {
+	my ($cigarRef, $reverse) = @_;
+	my $cigar = '';
+	if (defined $reverse && 0!=$reverse) {
+		grep { $cigar .= $_->{count}.$_->{type} } reverse @{$cigarRef};
+	} else {
+		grep { $cigar .= $_->{count}.$_->{type} } @{$cigarRef};
+	}
+	return $cigar;
+}
+
+sub parseMAFRecordGenCigar {
+	my ($aline, $sline, $qline, $qualityLine, $alignRef, $keepline) = @_;
+	
+	# let's process the block
+	# a score=1897 EG2=0 E=0
+	# s chr6                        160881684 3801 + 171115067 CCCAAGAAAAC
+	# s WTD01:50183:2D:P:3:M:L13738        32 3791 +     13738 CCCAAGAAAAT
+	# q WTD01:50183:2D:P:3:M:L13738                            4/0825;7<=3
+	
+	my $recordLine = (defined $keepline) ? $keepline : 0;
+	
+	%{$alignRef} = ();
+	
+	# work on ^a line
+	chomp($aline);
+	$alignRef->{lines} = [$aline] if (0!=$recordLine);
+	my ($line) = $aline =~ /^a\s+(.*)/;
+	foreach my $keyValue (split(/\s+/, $line)) {
+		my ($key, $value) = split(/\=/, $keyValue);
+		$alignRef->{$key} = $value;
+	}
+	
+	# work on ^s line
+	chomp($sline);
+	push @{$alignRef->{lines}}, $sline if (0!=$recordLine);
+	my @bits = split(/\s+/, $sline);
+	my %ref=();
+	$ref{'ref'} = $bits[1];
+	$ref{'refstart'} = int($bits[2]); # it is 0-based
+	$ref{'refalignlen'} = int($bits[3]);
+	$ref{'refstrand'} = $bits[4];
+	$ref{'refsize'} = int($bits[5]);
+	$ref{'refseq'} = $bits[6];
+	#my $sbases = $bits[6]; $sbases =~ s/\-//g; $ref{'refend'} = $ref{'refstart'} + length($sbases); # start is 0-based
+	$ref{'refend'} = $ref{'refstart'} + $ref{'refalignlen'}; # start is 0-based
+	$alignRef->{'ref'} = \%ref;
+	
+	# work on ^s line
+	chomp($qline);
+	push @{$alignRef->{lines}}, $qline if (0!=$recordLine);
+	@bits = split(/\s+/, $qline);
+	my %read=();
+	$read{'read'} = $bits[1];
+	$read{'readstart'} = int($bits[2]); # it is 0-based
+	$read{'readalignlen'} = int($bits[3]);
+	$read{'readstrand'} = $bits[4];
+	$read{'readsize'} = int($bits[5]);
+	$read{'readseq'} = $bits[6];
+	#my $qbases = $bits[6]; $qbases =~ s/\-//g; $read{'readend'} = $read{'readstart'} + length($qbases); # start is 0-based
+	$read{'readend'} = $read{'readstart'} + $read{'readalignlen'}; # start is 0-based
+	$alignRef->{'read'} = \%read;
+	
+	#####
+	# we need to make read as the reference '+' coordinates for easier assembly later
+	if ('-' eq $read{'readstrand'}) {
+		$ref{'refstrand'} = '-';
+		$read{'readstrand'} = '+';
+		
+		# from .maf file
+		# Coordinates are 0-based.  For - strand matches, coordinates
+		# in the reverse complement of the 2nd sequence are used.
+		$read{'readstart'} = $read{'readsize'} - $read{'readstart'} - $read{'readalignlen'}; # start is 0-based
+		$read{'readend'} = $read{'readstart'} + $read{'readalignlen'}; # +1 'cos start is 0-based
+		
+		# NOTE: we do not reverse complement the sequences as the profile computation is the same
+		#       however, the CIGAR generation should be taken care of
+		$ref{'refseq'} = reverse $ref{'refseq'};
+		$read{'readseq'} = reverse $read{'readseq'};
+	}
+	
+	my %profile = ();
+	_profileTwoSeqs($ref{'refseq'}, $read{'readseq'}, \%profile);
+	$alignRef->{'profile'} = \%profile;
+	
+	# generate the CIGAR string
+	my @cigar = ();
+	generateCIGAR($ref{'refseq'}, $read{'readseq'}, $read{'readstart'}, $read{'readsize'}, $read{'readstrand'}, \@cigar);
+	my $cigar = getCIGARFromBits(\@cigar, '-' eq $ref{refstrand} ?1:0);
+	$read{'cigar'} = $cigar;
+	
+	# work on ^q line
+	chomp($qualityLine);
+	push @{$alignRef->{lines}}, $qualityLine if (0!=$recordLine);
+	
+	# clear sequences to reduce memory consumption and easier debugging
 	delete $ref{'refseq'};
 	delete $read{'readseq'};
 }
