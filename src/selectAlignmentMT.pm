@@ -2,8 +2,12 @@
 #
 # Jackson Laboratory Non-Commercial License
 # See the LICENSE file (LICENSE.txt) for license rights and limitations
+# https://github.com/TheJacksonLaboratory/Picky/blob/master/LICENSE.md
 #
 # Picky - Structural Variants Pipeline for long read
+#
+# Repository: https://github.com/TheJacksonLaboratory/Picky
+# Documentation: https://github.com/TheJacksonLaboratory/Picky/wiki
 #
 # Created Aug 16, 2016
 # Copyright (c) 2016-2017  Chee-Hong WONG

@@ -3,8 +3,12 @@
 #
 # Jackson Laboratory Non-Commercial License
 # See the LICENSE file (LICENSE.txt) for license rights and limitations
+# https://github.com/TheJacksonLaboratory/Picky/blob/master/LICENSE.md
 #
 # Picky - Structural Variants Pipeline for long read
+#
+# Repository: https://github.com/TheJacksonLaboratory/Picky
+# Documentation: https://github.com/TheJacksonLaboratory/Picky/wiki
 #
 # Created Aug 16, 2016
 # Copyright (c) 2016-2017  Chee-Hong WONG
@@ -12,41 +16,6 @@
 #                          The Jackson Laboratory
 #
 #####
-
-#####
-# picky.pl
-#
-# hashFq Examples:
-#   picky.pl hashFq -pfile 2016-08-24-R9-WTD-R009.pass.fastq -ffile 2016-08-24-R9-WTD-R009.fail.fastq -oprefix WTD09
-#   picky.pl hashFq -pfile 2016-08-24-R9-WTD-R009.pass.fastq -oprefix WTD09P
-#   picky.pl hashFq -ffile 2016-08-24-R9-WTD-R009.fail.fastq -oprefix WTD09F
-#
-# selectRep Examples:
-#   last-755/src/lastal -r1 -q1 -a0 -b2 -P4 -Q1 hg19.lastdb ${RUNTYPE}.fastq 1>${RUNTYPE}.v755.hg19.maf 2>${RUNTYPE}.v755.hg19.log ; \
-#   cat ${RUNTYPE}.v755.hg19.maf | ./picky.pl selectRep --thread 4 --preload 6 1>${RUNTYPE}.v755.hg19.selectRep.align 2>${RUNTYPE}.v755.hg19.selectRep.log
-#   .. or ..
-#   last-755/src/lastal -r1 -q1 -a0 -b2 -P4 -Q1 hg19.lastdb ${RUNTYPE}.fastq 2>${RUNTYPE}.v755.hg19.log \
-#   | ./picky.pl selectRep --thread 4 --preload 6 1>${RUNTYPE}.v755.hg19.selectRep.align 2>${RUNTYPE}.v755.hg19.selectRep.log
-#
-# callSV Examples:
-#   cat ${RUNTYPE}.v755.hg19.selectRep.align | ./picky.pl callSV --oprefix ${RUNTYPE}.v755.hg19.selectRep --fastq ${RUNTYPE}.fastq \
-#     --genome hg19.fa --removehomopolymerdeletion --exclude=chrY --exclude=chrM --sam 2>${RUNTYPE}.v755.hg19.callSV.log
-#   .. or ..
-#   cat ${RUNTYPE}.v755.hg19.selectRep.align | ./picky.pl callSV --oprefix ${RUNTYPE}.v755.hg19.selectRep --fastq ${RUNTYPE}.fastq \
-#     --genome hg19.fa --removehomopolymerdeletion --exclude=chrY --exclude=chrM 2>${RUNTYPE}.v755.hg19.callSV.log
-#   .. or ..
-#   cat ${RUNTYPE}.v755.hg19.selectRep.align | ./picky.pl callSV --oprefix ${RUNTYPE}.v755.hg19.selectRep --fastq ${RUNTYPE}.fastq \
-#     --exclude=chrY --exclude=chrM 2>${RUNTYPE}.v755.hg19.callSV.log
-#
-# lastParam Examples:
-#   ./Picky.pl lastParam
-#
-#####
-
-#####
-# TODO:
-# 1. command to generate the lastal command for processing
-#
 
 use strict;
 use Getopt::Long;
