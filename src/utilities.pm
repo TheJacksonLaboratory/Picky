@@ -1,6 +1,9 @@
 #####
 #
-# Picky - Structural Variants Pipeline for (ONT) long read
+# Jackson Laboratory Non-Commercial License
+# See the LICENSE file (LICENSE.txt) for license rights and limitations
+#
+# Picky - Structural Variants Pipeline for long read
 #
 # Created Aug 16, 2016
 # Copyright (c) 2016-2017  Chee-Hong WONG
@@ -123,7 +126,10 @@ sub _profileTwoSeqs {
 	$profileRef->{'D'} = 0;
 	#$profileRef->{'Ifrag'} = 0;
 	#$profileRef->{'Dfrag'} = 0;
-	die "Reference length (",length($refSeq),") != Query length (",length($querySeq),")\n" if (length($refSeq)!=length($querySeq));
+	if (length($refSeq)!=length($querySeq)) {
+		print STDERR "_profileTwoSeqs(): Reference length (",length($refSeq),") != Query length (",length($querySeq),")\nrefSeq=$refSeq\nquerySeq=$querySeq\n";
+		return -1;
+	}
 	for(my $i=0; $i<length($refSeq); $i++) {
 		my $refbase = substr($refSeq, $i, 1);
 		my $querybase = substr($querySeq, $i, 1);
@@ -155,6 +161,8 @@ sub _profileTwoSeqs {
 	my $denominator = 0; grep { $denominator += $profileRef->{$_}; } @G_AlignmentTypes;
 	$profileRef->{'TOTAL'} = $denominator;
 	$profileRef->{'%='} = $profileRef->{'='} * 100.0 / $profileRef->{'TOTAL'};
+
+	return 0;
 }
 
 sub parseMAFRecord {
@@ -239,7 +247,7 @@ sub parseMAFRecord {
 sub generateCIGAR {
 	my ($refSeq, $querySeq, $qStart, $qSize, $qStrand, $cigarRef) = @_;
 	
-	die "Reference length (",length($refSeq),") != Query length (",length($querySeq),")\n" if (length($refSeq)!=length($querySeq));
+	die "generateCIGAR(): Reference length (",length($refSeq),") != Query length (",length($querySeq),")\nrefSeq=$refSeq\nquerySeq=$querySeq\n" if (length($refSeq)!=length($querySeq));
 	
 	# WCH: 20170215, qStart is passed as 0-based
 	# $qStart;
@@ -381,8 +389,20 @@ sub parseMAFRecordGenCigar {
 	}
 	
 	my %profile = ();
-	_profileTwoSeqs($ref{'refseq'}, $read{'readseq'}, \%profile);
-	$alignRef->{'profile'} = \%profile;
+	if (0==_profileTwoSeqs($ref{'refseq'}, $read{'readseq'}, \%profile)) {
+		$alignRef->{'profile'} = \%profile;
+		#print STDERR "aline=", $aline, "\n";
+		#print STDERR "sline=", $sline, "\n";
+		#print STDERR "qline=", $qline, "\n";
+		#print STDERR "quality=", $qualityLine, "\n";
+	} else {
+		print STDERR "ERROR: Subject and query sequence lengths do not match!\n";
+		print STDERR "aline=", $aline, "\n";
+		print STDERR "sline=", $sline, "\n";
+		print STDERR "qline=", $qline, "\n";
+		print STDERR "quality=", $qualityLine, "\n";
+		die "ERROR: Subject and query sequence lengths do not match!\n";
+	}
 	
 	# generate the CIGAR string
 	my @cigar = ();
@@ -432,10 +452,15 @@ sub loadReadFastqFile{
 		$_ =~ s/^@//;
 		my @bits = split(/\s+/);
 		my $id = $bits[0];
-		die "Read id $id already exists.\n" if (exists $seqsRef->{$id});
-		my $seq = <FQFILE>; chomp($seq); $seqsRef->{$id} = {seq=>$seq};
+		my $seq = <FQFILE>; chomp($seq);
 		my $ignore = <FQFILE>;
-		my $quality = <FQFILE>; chomp($quality); $seqsRef->{$id}->{qual} = $quality;
+		my $quality = <FQFILE>; chomp($quality);
+		if (!exists $seqsRef->{$id}) {
+			$seqsRef->{$id} = {seq=>$seq};
+			$seqsRef->{$id}->{qual} = $quality;
+		} else {
+			print STDERR "WARNING: Read id $id already exists. Skipping..\n" 
+		}
 	}
 	close FQFILE;
 }

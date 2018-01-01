@@ -1,6 +1,9 @@
 #####
 #
-# Picky - Structural Variants Pipeline for (ONT) long read
+# Jackson Laboratory Non-Commercial License
+# See the LICENSE file (LICENSE.txt) for license rights and limitations
+#
+# Picky - Structural Variants Pipeline for long read
 #
 # Created Aug 16, 2016
 # Copyright (c) 2016-2017  Chee-Hong WONG
@@ -108,6 +111,39 @@ sub containsSV {
 						$alignmentsRef->[$i]->{SVs}->{$self->{'_SVType'}} = 1;
 					}
 				}
+			} elsif ($alignmentsRef->[$i]->{qStart}<$alignmentsRef->[$j]->{qStart}) {
+				my $span = $alignmentsRef->[$j]->{qStart} - $alignmentsRef->[$i]->{qEnd}; # 0-based; + 1
+				my $refGap = $alignmentsRef->[$j]->{refStart} - $alignmentsRef->[$i]->{refEnd}; # 0-based; + 1
+				my $netEffect = $refGap - $span;
+				if ($netEffect<0) {
+					$netEffect *= -1;
+					if (-1*$netEffect>$self->{'_ins_min_qdiff'}) {
+						if ($refGap<$self->{'_ins_max_sdiff'}) {
+							# NOTE: If this is a TDC/TDSR, there is no need to indicate that it is an INS anymore
+							if (exists $alignmentsRef->[$i]->{SVs}) {
+								next if (exists $alignmentsRef->[$i]->{SVs}->{TDC});
+								next if (exists $alignmentsRef->[$i]->{SVs}->{TDSR});
+							}
+
+							my $start = undef; my $end = undef;
+							if ($refGap<=0) {
+								# insertion happens at the end of fragment(i)
+								$start = $alignmentsRef->[$i]->{refEnd}+$netEffect; $end = $alignmentsRef->[$i]->{refEnd}+1;
+							} else {
+								# there is a segment that is replaced by the insertion
+								$start = $alignmentsRef->[$i]->{refEnd}; $end = $alignmentsRef->[$j]->{refStart};
+							}
+							
+							my %svItem = (SVType=>$self->{'_SVType'}, chrom=>$alignmentsRef->[$i]->{refId}, start=>$start, end=>$end,
+							fragmentIds=>[$i, $j], qDiff=>$span, sDiff=>$refGap, svLen=>-1*$netEffect);
+							$svItem{alignsRef} = $alignmentsRef;
+							push @{$self->{'_svs'}}, \%svItem; $self->{'_numsvs'}++;
+							
+							$alignmentsRef->[$i]->{SVs} = {} if (!exists $alignmentsRef->[$i]->{SVs});
+							$alignmentsRef->[$i]->{SVs}->{$self->{'_SVType'}} = 1;
+						}
+					}
+				}
 			}
 		} else {
 			if ($alignmentsRef->[$i]->{qEnd}<$alignmentsRef->[$j]->{qStart}) {
@@ -137,6 +173,38 @@ sub containsSV {
 						
 						$alignmentsRef->[$i]->{SVs} = {} if (!exists $alignmentsRef->[$i]->{SVs});
 						$alignmentsRef->[$i]->{SVs}->{$self->{'_SVType'}} = 1;
+					}
+				}
+			} elsif ($alignmentsRef->[$i]->{qEnd}<$alignmentsRef->[$j]->{qEnd}) {
+				my $span = $alignmentsRef->[$j]->{qStart} - $alignmentsRef->[$i]->{qEnd}; # 0-based; + 1
+				my $refGap = $alignmentsRef->[$i]->{refStart} - $alignmentsRef->[$j]->{refEnd}; # 0-based; + 1
+				my $netEffect = $refGap - $span;
+				if ($netEffect<0) {
+					if (-1*$netEffect>$self->{'_ins_min_qdiff'}) {
+						if ($refGap<$self->{'_ins_max_sdiff'}) {
+							# NOTE: If this is a TDC/TDSR, there is no need to indicate that it is an INS anymore
+							if (exists $alignmentsRef->[$i]->{SVs}) {
+								next if (exists $alignmentsRef->[$i]->{SVs}->{TDC});
+								next if (exists $alignmentsRef->[$i]->{SVs}->{TDSR});
+							}
+							my $start = undef; my $end = undef;
+							if ($refGap<=0) {
+								# insertion happens at the end of fragment(j)
+								# NOTE: should use fragment(i) but fragment(j) will be the same as '+' set up
+								$start = $alignmentsRef->[$j]->{refEnd}+$netEffect; $end = $alignmentsRef->[$j]->{refEnd}+1;
+							} else {
+								# there is a segment that is replaced by the insertion
+								$start = $alignmentsRef->[$j]->{refEnd}; $end = $alignmentsRef->[$i]->{refStart};
+							}
+							
+							my %svItem = (SVType=>$self->{'_SVType'}, chrom=>$alignmentsRef->[$i]->{refId}, start=>$start, end=>$end,
+							fragmentIds=>[$i, $j], qDiff=>$span, sDiff=>$refGap, svLen=>-1*$netEffect);
+							$svItem{alignsRef} = $alignmentsRef;
+							push @{$self->{'_svs'}}, \%svItem; $self->{'_numsvs'}++;
+							
+							$alignmentsRef->[$i]->{SVs} = {} if (!exists $alignmentsRef->[$i]->{SVs});
+							$alignmentsRef->[$i]->{SVs}->{$self->{'_SVType'}} = 1;
+						}
 					}
 				}
 			}

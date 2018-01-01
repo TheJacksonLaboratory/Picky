@@ -1,6 +1,9 @@
 #####
 #
-# Picky - Structural Variants Pipeline for (ONT) long read
+# Jackson Laboratory Non-Commercial License
+# See the LICENSE file (LICENSE.txt) for license rights and limitations
+#
+# Picky - Structural Variants Pipeline for long read
 #
 # Created Aug 16, 2016
 # Copyright (c) 2016-2017  Chee-Hong WONG
@@ -111,6 +114,31 @@ sub containsSV {
 						}
 					}
 				}
+			} elsif ($alignmentsRef->[$i]->{refStart}<$alignmentsRef->[$j]->{refStart}) {
+				my $span = $alignmentsRef->[$j]->{refStart} - $alignmentsRef->[$i]->{refEnd};
+				my $readGap = $alignmentsRef->[$j]->{qStart} - $alignmentsRef->[$i]->{qEnd};
+				my $netEffect = $span - $readGap;
+				if ($netEffect>$self->{'_del_min_sdiff'}) {
+					if ($netEffect<=$self->{'_ctlc_min_sdiff'}) {
+						# NOTE: CTLC take precedence, not deletion
+						next if (exists $alignmentsRef->[$i]->{SVs} && exists $alignmentsRef->[$i]->{SVs}->{CTLC});
+						
+						# TODO: check for homopolymer issue
+						my $effectiveEnd = $alignmentsRef->[$i]->{refEnd};
+						if ($readGap<0) {
+							$effectiveEnd += $readGap;
+							$effectiveEnd -= $span if ($span<0);
+						}
+						my %svItem = (SVType=>$self->{'_SVType'}, chrom=>$alignmentsRef->[$i]->{refId}, start=>$effectiveEnd, end=>$alignmentsRef->[$j]->{refStart},
+						fragmentIds=>[$i, $j], qDiff=>$readGap, sDiff=>$span, svLen=>$netEffect);
+						$svItem{alignsRef} = $alignmentsRef;
+						push @{$self->{'_svs'}}, \%svItem; $self->{'_numsvs'}++;
+						
+						$alignmentsRef->[$i]->{SVs} = {} if (!exists $alignmentsRef->[$i]->{SVs});
+						$alignmentsRef->[$i]->{SVs}->{$self->{'_SVType'}} = 1;
+					}
+				}
+
 			}
 		} else {
 			if ($alignmentsRef->[$j]->{refEnd}<$alignmentsRef->[$i]->{refStart}) {
@@ -136,6 +164,30 @@ sub containsSV {
 							$alignmentsRef->[$i]->{SVs} = {} if (!exists $alignmentsRef->[$i]->{SVs});
 							$alignmentsRef->[$i]->{SVs}->{$self->{'_SVType'}} = 1;
 						}
+					}
+				}
+			}  elsif ($alignmentsRef->[$j]->{refEnd}<$alignmentsRef->[$i]->{refEnd}) {
+				my $span = $alignmentsRef->[$i]->{refStart} - $alignmentsRef->[$j]->{refEnd}; #0-based; remove + 1
+				my $readGap = $alignmentsRef->[$j]->{qStart} - $alignmentsRef->[$i]->{qEnd}; #0-based; remove + 1
+				my $netEffect = $span - $readGap; # TODO: check value!!!
+				if ($netEffect>$self->{'_del_min_sdiff'}) {
+					if ($netEffect<=$self->{'_ctlc_min_sdiff'}) {
+						# NOTE: CTLC take precedence, not deletion
+						next if (exists $alignmentsRef->[$i]->{SVs} && exists $alignmentsRef->[$i]->{SVs}->{CTLC});
+						
+						# TODO: check for homopolymer issue
+						my $effectiveEnd = $alignmentsRef->[$j]->{refEnd};
+						if ($readGap<0) {
+							$effectiveEnd += $readGap;
+							$effectiveEnd -= $span if ($span<0);
+						}
+						my %svItem = (SVType=>$self->{'_SVType'}, chrom=>$alignmentsRef->[$i]->{refId}, start=>$effectiveEnd, end=>$alignmentsRef->[$i]->{refStart},
+						fragmentIds=>[$i, $j], qDiff=>$readGap, sDiff=>$span, svLen=>$netEffect);
+						$svItem{alignsRef} = $alignmentsRef;
+						push @{$self->{'_svs'}}, \%svItem; $self->{'_numsvs'}++;
+						
+						$alignmentsRef->[$i]->{SVs} = {} if (!exists $alignmentsRef->[$i]->{SVs});
+						$alignmentsRef->[$i]->{SVs}->{$self->{'_SVType'}} = 1;
 					}
 				}
 			}

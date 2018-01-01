@@ -1,6 +1,9 @@
 #####
 #
-# Picky - Structural Variants Pipeline for (ONT) long read
+# Jackson Laboratory Non-Commercial License
+# See the LICENSE file (LICENSE.txt) for license rights and limitations
+#
+# Picky - Structural Variants Pipeline for long read
 #
 # Created Aug 16, 2016
 # Copyright (c) 2016-2017  Chee-Hong WONG
@@ -92,7 +95,7 @@ sub runSelectRepresentativeAlignments {
 	}
 	
 	# start maf record reader in current thread
-	readMAFRecords(\%qRequests, $maxEG2, $minIdentityPercent);
+	my $numRecords = readMAFRecords(\%qRequests, $maxEG2, $minIdentityPercent);
 	for(my $i=0; $i<$numberOfThreads; ++$i) {
 		$requestSlots->down(); # block until there is a free slot
 		$qRequests->enqueue("DONE");
@@ -106,6 +109,7 @@ sub runSelectRepresentativeAlignments {
 	my $totalTime = time - $startTime;
 	printf STDERR "%s Total run time = %d secs\n", utilities::getTimeStamp(), $totalTime;
 	printf STDERR "%s %d .maf lines processed.\n", utilities::getTimeStamp(), $.;
+	printf STDERR "%s %d read(s) processed\n", utilities::getTimeStamp() , $numRecords;
 	
 	close STDOUT || die "Fail to close STDOUT\n$!\n";
 	close STDERR || die "Fail to close STDERR\n$!\n";
@@ -237,7 +241,7 @@ sub readMAFRecords {
 						# ignore
 					}
 					$_=<STDIN>;
-				} while ('#' eq substr($_,0,1));
+				} while (defined $_ && '#' eq substr($_,0,1));
 				print "# \@PG_END\n";
 				$parseHeader = 0;
 			} else {
@@ -245,7 +249,7 @@ sub readMAFRecords {
 				next;
 			}
 		}
-		if (/^a\s+/) {
+		if (defined $_ && /^a\s+/) {
 			# let's process the block
 			# a score=1897 EG2=0 E=0
 			# s chr6                        160881684 3801 + 171115067 CCCAAGAAAAC
@@ -296,6 +300,8 @@ sub readMAFRecords {
 		$qRequests->{_hackSlots}->down(); # block until there is a free slot
 		$qRequests->{qRequests}->enqueue(\%pickRequest);
 	}
+
+	return $serialNumber;
 }
 
 1;

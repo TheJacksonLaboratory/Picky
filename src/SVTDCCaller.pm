@@ -1,6 +1,9 @@
 #####
 #
-# Picky - Structural Variants Pipeline for (ONT) long read
+# Jackson Laboratory Non-Commercial License
+# See the LICENSE file (LICENSE.txt) for license rights and limitations
+#
+# Picky - Structural Variants Pipeline for long read
 #
 # Created Aug 16, 2016
 # Copyright (c) 2016-2017  Chee-Hong WONG
@@ -90,7 +93,7 @@ sub containsSV {
 		# same chromosome and same strand
 		# check the order
 		if ('+' eq $alignmentsRef->[$i]->{refStrand}) {
-			if ($midPoints[$i]<$midPoints[$j]) {
+			if ($midPoints[$i]<=$midPoints[$j]) {
 				# let's check the overlap
 				my $iAlignRef = $alignmentsRef->[$i];
 				my $jAlignRef = $alignmentsRef->[$j];
@@ -155,7 +158,7 @@ sub containsSV {
 				}
 			}
 		} else {
-			if ($midPoints[$j]<$midPoints[$i]) {
+			if ($midPoints[$j]<=$midPoints[$i]) {
 				# let's check the overlap
 				my $iAlignRef = $alignmentsRef->[$i];
 				my $jAlignRef = $alignmentsRef->[$j];

@@ -1,6 +1,9 @@
 #####
 #
-# Picky - Structural Variants Pipeline for (ONT) long read
+# Jackson Laboratory Non-Commercial License
+# See the LICENSE file (LICENSE.txt) for license rights and limitations
+#
+# Picky - Structural Variants Pipeline for long read
 #
 # Created Aug 16, 2016
 # Copyright (c) 2016-2017  Chee-Hong WONG
@@ -40,18 +43,19 @@ my $G_MIN_IDENTITY_VARIANCE = 65;  # was: %= >=55%
 
 # extending overlap
 my $G_MIN_FRACTION_UNIQUE = 0.5;
-my $G_MIN_SPECIFIC_EXTENDED_BP = 200; # rescue very specific alignment for extension
+my $G_MIN_SPECIFIC_EXTENDED_BP = 170; #200; # rescue very specific alignment for extension
 my $G_FLANKING_REMAIN_MIN_FRACTION_COV_ALIGN = 0.95;
 my $G_FLANKING_MAX_OVERLAP_FRACTION_COV_ALIGN = 0.5;
 my $G_EXTENSION_MAX_OVERLAP_FRACTION = 0.5;
 my $G_EXTENSION_MAX_OVERLAP_BP = 2500;
 #my $G_EXTENSION_MIN_LENGTH_FRACTION = 0.33;
 my $G_EXTENSION_MIN_LENGTH_FRACTION = 0.70;
+my $G_EXTENSION_MIN_LENGTH = 900;
 # bound for proximity to best seed
-my $G_IDENTITY_VARIANCE = 10;
+my $G_IDENTITY_VARIANCE = 13; #10;
 
 # stiched results threshold
-my $G_MIN_FINAL_READ_COVERAGE = 0.7;
+my $G_MIN_FINAL_READ_COVERAGE = 0.65; #0.7;
 
 # superset threshold
 my $G_SIMILAR_IDENTITY_VARIANCE = 5;
@@ -277,7 +281,7 @@ sub extendSeedLeft {
     @{$candidatesRef} = sort { $a->[0]->{EG2}<=>$b->[0]->{EG2} || $b->[0]->{score}<=>$a->[0]->{score} } @{$candidatesRef};
 
     my $bestLength = $candidatesRef->[0]->[-1]->{read}->{readalignlen};
-    @{$candidatesRef} = grep { $_->[-1]->{read}->{readalignlen}/$bestLength > $G_EXTENSION_MIN_LENGTH_FRACTION } @{$candidatesRef};
+    @{$candidatesRef} = grep { $_->[-1]->{read}->{readalignlen}/$bestLength > $G_EXTENSION_MIN_LENGTH_FRACTION || $_->[-1]->{read}->{readalignlen}>$G_EXTENSION_MIN_LENGTH } @{$candidatesRef};
 	
     my $extendTimeExceeded = 0;
     my @finalCandidates = ();
@@ -428,7 +432,7 @@ sub extendSeedRight {
     @{$candidatesRef} = sort { $a->[0]->{EG2}<=>$b->[0]->{EG2} || $b->[0]->{score}<=>$a->[0]->{score} } @{$candidatesRef};
     
     my $bestLength = $candidatesRef->[0]->[-1]->{read}->{readalignlen};
-    @{$candidatesRef} = grep { $_->[-1]->{read}->{readalignlen}/$bestLength > $G_EXTENSION_MIN_LENGTH_FRACTION } @{$candidatesRef};
+    @{$candidatesRef} = grep { $_->[-1]->{read}->{readalignlen}/$bestLength > $G_EXTENSION_MIN_LENGTH_FRACTION || $_->[-1]->{read}->{readalignlen}>$G_EXTENSION_MIN_LENGTH} @{$candidatesRef};
 
     my $extendTimeExceeded = 0;
     my @finalCandidates = ();
@@ -473,12 +477,16 @@ sub extendSeed {
         # need to extend 3' end ... $qStartsOrderRef
         $extendTimeExceeded = extendSeedRight($seedRef, $qStartsOrderRef, $startTime, \@rightCandidates);
         $numRightCandidates = scalar(@rightCandidates);
+        #print "seedRef = ", Dumper($seedRef), "\n";
+        #print "rightCandidates = ", Dumper(\@rightCandidates), "\n";
     }
 	
     if ($seedRef->{read}->{readstart}>$G_MIN_SPECIFIC_EXTENDED_BP && 0==$extendTimeExceeded) {
         # need to extend 5' end ... $qEndsOrderRef
         $extendTimeExceeded = extendSeedLeft($seedRef, $qEndsOrderRef, $startTime, \@leftCandidates);
         $numLeftCandidates = scalar(@leftCandidates);
+        #print "seedRef = ", Dumper($seedRef), "\n";
+        #print "leftCandidates = ", Dumper(\@leftCandidates), "\n";
     }
 	
     $$numRightCandidatesRef = $numRightCandidates;
@@ -566,8 +574,8 @@ sub extendSeed {
 sub getCandidateMetrics {
     my ($candidateRef) = @_;
     
-    my $score = 0;
-    grep { $score+= $_->{score} } @{$candidateRef};
+    my $cscore = 0;
+    grep { $cscore+= $_->{score} } @{$candidateRef};
     
     # compute the coverage?!
     my $numCandidate = scalar(@{$candidateRef});
@@ -591,14 +599,15 @@ sub getCandidateMetrics {
                 $coverageFraction += $alignLen;
                 
                 # consider if this is necessary: penalize the gap between region
-                my $gap = ($candidateRef->{read}->{readstart} - $x1e + 1);
-                $score -= $gap;
+                #my $gap = ($candidateRef->{read}->{readstart} - $x1e + 1);
+                my $gap = ($x1e < $candidateRef->{read}->{readstart}) ? ($candidateRef->{read}->{readstart} - $x1e - 1) : ($x1s - $candidateRef->{read}->{readend} - 1);
+                $cscore -= $gap;
             } else {
                 # there are some overlap
                 $coverageFraction += ($alignLen - $overlap);
                 
                 # consider if this is necessary, penalize the overlapping region
-                $score -= $overlap;
+                $cscore -= $overlap;
             }
             $x1s = $candidateRef->{read}->{readstart} if ($candidateRef->{read}->{readstart} < $x1s);
             $x1e = $candidateRef->{read}->{readend} if ($candidateRef->{read}->{readend} > $x1e);
@@ -608,21 +617,20 @@ sub getCandidateMetrics {
         $endPos = $x1e;
     }
     
-    return ($score, $coverageFraction, $startPos, $endPos);
+    return ($cscore, $coverageFraction, $startPos, $endPos);
 }
 
 sub getBestCandidateMetrics {
     my ($candidatesRef) = @_;
-    
     
     my $bestScore = 0;
     my $bestCoverageFraction = 0.0;
     my $bestStartPos = 0;
     my $bestEndPos = 0;
     foreach my $candidateRef (@{$candidatesRef}) {
-        my ($score, $coverageFraction, $startPos, $endPos) = getCandidateMetrics($candidateRef);
+        my ($bcscore, $coverageFraction, $startPos, $endPos) = getCandidateMetrics($candidateRef);
         # do we track the score and coverage separately?
-        $bestScore = $score if ($score>$bestScore);
+        $bestScore = $bcscore if ($bcscore>$bestScore);
         if ($coverageFraction>$bestCoverageFraction) {
             $bestCoverageFraction = $coverageFraction;
             $bestStartPos = $startPos;
@@ -984,6 +992,7 @@ sub processAlignments {
                 my $numRightCandidates = 0;
                 my $numLeftCandidates = 0;
                 my $candidatesReduction = 0;
+                my $numExtensionDone = 0;
                 foreach my $seedRef (@collapsedSeeds) {
                     # let's check each of the seed
                     next if (exists $seedRef->{extended} && 0!=$seedRef->{extended});
@@ -1011,6 +1020,13 @@ sub processAlignments {
                             # next;
                             @seedCandidates = ();
                         }
+                    } else {
+                        ($bestScore, $bestCoverageFraction, $bestStartPos, $bestEndPos) = getBestCandidateMetrics(\@seedCandidates);
+                        if (0.9*$bestScore>$minScore) {
+                            $bestCandidateRef = \@seedCandidates;
+                            $minScore = 0.9*$bestScore; # TODO: 90% constant
+                            $minCoverageFraction = $bestCoverageFraction - 0.1; # TODO: adjust coverage?
+                        }
                     }
                     
                     foreach my $candidateRef (@seedCandidates) {
@@ -1026,6 +1042,21 @@ sub processAlignments {
                             }
                         }
                     }
+
+                    # remove candidates that has fall out of range!
+                    my @sieves = ();
+                    foreach my $candidateRef (@candidates) {
+                        my ($score, $coverageFraction, $startPos, $endPos) = getCandidateMetrics($candidateRef);
+                        if ($score>=$minScore) {
+                        #if ($score>=$minScore || $coverageFraction>=$minCoverageFraction) {
+                            if ($coverageFraction/$bestCoverageFraction>=$G_SIMILAR_MIN_FRACTION_COV_ALIGN) {
+                                if (0==existCandidate($candidateRef, \@sieves)) {
+                                    push @sieves, $candidateRef;
+                                }
+                            }
+                        }
+                    }
+                    @candidates = (); push @candidates, @sieves;
                     
                     # should have a flag for this?
                     my $currCount = scalar(@candidates);

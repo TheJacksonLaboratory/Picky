@@ -1,6 +1,9 @@
 #####
 #
-# Picky - Structural Variants Pipeline for (ONT) long read
+# Jackson Laboratory Non-Commercial License
+# See the LICENSE file (LICENSE.txt) for license rights and limitations
+#
+# Picky - Structural Variants Pipeline for long read
 #
 # Created Aug 16, 2016
 # Copyright (c) 2016-2017  Chee-Hong WONG
@@ -66,6 +69,7 @@ $0 callSV --in <alignFile> --fastq <fqFile> --lastpara <last parameters> [--geno
   --sam           flag to output .sam file
   --exclude STR   exclude SV invovling specified chromosome
                   (specify each chromosome with --exclude individually)
+  --multiloci     report SVs on best alignment of multi-loci aligments
 ";
 
 sub runCallStructuralVariants {
@@ -79,16 +83,18 @@ sub runCallStructuralVariants {
 	my $G_readseq = 0;
 	my @G_excludeChrs = ();
 	my $G_excludeChrsRef = undef;
+	my $G_multiloci = 0;
 	my $help = 0;
 	
 	GetOptions (
-	"oprefix=s"         => \$oprefix,
+	"oprefix=s"    => \$oprefix,
 	"fastq=s"      => \$fqfile,
 	"genome=s"     => \$genome,
 	"removehomopolymerdeletion" => \$G_removeHomopolymerDeletion,
-	"sam"         => \$outputSam,
+	"sam"          => \$outputSam,
 	"lastpara"     => \$lastpara,
 	"exclude=s"    => \@G_excludeChrs,
+	"multiloci"    => \$G_multiloci,
 	"help!"        => \$help)
 	or die("Error in command line arguments\n$G_USAGE");
 	
@@ -213,7 +219,7 @@ sub runCallStructuralVariants {
 			} elsif ($afterComment =~ /^\d+/) {
 				# '# 3196'
 				### check the results
-				my $line = $_; profileResults ($readRef, $G_excludeChrsRef, \%svCallers, \@svCallers, $noneHandlerRef, $outputSam, \%seenReadIds, \%statistics, $fhSam, $fhExclude, $fhBed); $_ = $line; # 'cos classifyResult perform file read operation
+				my $line = $_; profileResults ($readRef, $G_excludeChrsRef, \%svCallers, \@svCallers, $noneHandlerRef, $outputSam, \%seenReadIds, \%statistics, $fhSam, $fhExclude, $fhBed, $G_multiloci); $_ = $line; # 'cos classifyResult perform file read operation
 				
 				$_ =~ s/^#\s+//;
 				my @bits = split(/\t/, $_);
@@ -255,18 +261,20 @@ sub runCallStructuralVariants {
 					$afterComment = substr($_, 2) if ('# ' eq substr($_, 0, 2));
 				} while ($afterComment!~/^\@PG_END/);
 				
-				die "Please specify the lastal database used for the alignment process." if (!defined $pg_db);
-				my $lastdbPrefix = $pg_db;
-				$lastdbPrefix =~ s/\.lastdb$// if ($lastdbPrefix =~ /\.lastdb$/);
-				my $lastdbSeqDic = $lastdbPrefix . '.seq.dict';
-				die "Lastal database dictionary '$lastdbSeqDic' does not exist. $G_USAGE" if (! -f $lastdbSeqDic);
-				open SEQDICT, $lastdbSeqDic || die "Fail to open $lastdbSeqDic\n$!\n";
-				while (<SEQDICT>) {
-					print $fhSam $_;
+				if (0!=$outputSam) {
+					die "Please specify the lastal database used for the alignment process." if (!defined $pg_db);
+					my $lastdbPrefix = $pg_db;
+					$lastdbPrefix =~ s/\.lastdb$// if ($lastdbPrefix =~ /\.lastdb$/);
+					my $lastdbSeqDic = $lastdbPrefix . '.seq.dict';
+					die "Lastal database dictionary '$lastdbSeqDic' does not exist. $G_USAGE" if (! -f $lastdbSeqDic);
+					open SEQDICT, $lastdbSeqDic || die "Fail to open $lastdbSeqDic\n$!\n";
+					while (<SEQDICT>) {
+						print $fhSam $_;
+					}
+					close SEQDICT;
+					# TODO: have to allow user to specify this information as aligner may be other than last
+					printf $fhSam "\@PG\tID:%s\tPN:%s\tVN:%s\tCL:lastal %s %s %s\n", $pg_id, $pg_pn, $pg_vn, $lastpara, $pg_db, $fqfile;
 				}
-				close SEQDICT;
-				# TODO: have to allow user to specify this information as aligner may be other than last
-				printf $fhSam "\@PG\tID:%s\tPN:%s\tVN:%s\tCL:lastal %s %s %s\n", $pg_id, $pg_pn, $pg_vn, $lastpara, $pg_db, $fqfile;
 			} else {
 				print $fhExclude "Unrecognized header1:\n\t$_";
 			}
@@ -364,7 +372,7 @@ sub runCallStructuralVariants {
 	}
 	# classify the candidates before proceeding
 	###
-	profileResults ($readRef, $G_excludeChrsRef, \%svCallers, \@svCallers, $noneHandlerRef, $outputSam, \%seenReadIds, \%statistics, $fhSam, $fhExclude, $fhBed);
+	profileResults ($readRef, $G_excludeChrsRef, \%svCallers, \@svCallers, $noneHandlerRef, $outputSam, \%seenReadIds, \%statistics, $fhSam, $fhExclude, $fhBed, $G_multiloci);
 	
 	# release resources no longer in use
 	%genomeSequences = (); # free up large memory
@@ -527,7 +535,7 @@ sub printSAM {
         if (0==$i) {
             $cigar = $repCigar;
         } else {
-			$repCigar = $alignRef->{'cigar'};
+			$cigar = $alignRef->{'cigar'};
         }
         push @cols, $cigar;
         #rnext
@@ -588,26 +596,45 @@ sub printSAM {
         push @cols, 'zn:Z:f'.($i+1).'/'.$numRows;
         
         # let's inject the "SA" tag
-        if (0==$i) {
-            # combine all cigar
-            if ($numRows>1) {
-                my @fragments = ();
-                for(my $i=1; $i<$numRows; ++$i) {
-                    my $fragAlignRef = $alignmentsRef->[$i];
-                    # TODO: mapq, nm
-                    my $mapq = 60;
-                    my $nm = 0;
-					my $cigar = $cigar = $fragAlignRef->{'cigar'};
-                    my @bits = ($fragAlignRef->{'refId'}, $fragAlignRef->{'refStart'}+1, $fragAlignRef->{refStrand}, $cigar, $mapq, $nm);
-                    push @fragments, join(',', @bits);
-                }
-                push @cols, 'SA:Z:'.join(";", @fragments);
-            }
-        } else {
-            # only the first
-            ### SA:Z:chr7,94283306,+,8000S7107M1664S,0,0;chr7,94289306,+,14195S1664M,0,0
-            push @cols, 'SA:Z:'.$repSA;
-        }
+		if (0==0) {
+			# WCH: coded per ngmlr
+			if ($numRows>1) {
+				my @fragments = ();
+				for(my $j=0; $j<$numRows; ++$j) {
+					next if ($j==$i);
+					my $fragAlignRef = $alignmentsRef->[$j];
+					# TODO: mapq, nm
+					my $mapq = 60;
+					my $nm = 0;
+					my $cigar = $fragAlignRef->{'cigar'};
+					my @bits = ($fragAlignRef->{'refId'}, $fragAlignRef->{'refStart'}+1, $fragAlignRef->{refStrand}, $cigar, $mapq, $nm);
+					push @fragments, join(',', @bits);
+				}
+				push @cols, 'SA:Z:'.join(";", @fragments).';';
+			}
+		} else {
+			# WCH: old code
+			if (0==$i) {
+				# combine all cigar
+				if ($numRows>1) {
+					my @fragments = ();
+					for(my $i=1; $i<$numRows; ++$i) {
+						my $fragAlignRef = $alignmentsRef->[$i];
+						# TODO: mapq, nm
+						my $mapq = 60;
+						my $nm = 0;
+						my $cigar = $cigar = $fragAlignRef->{'cigar'};
+						my @bits = ($fragAlignRef->{'refId'}, $fragAlignRef->{'refStart'}+1, $fragAlignRef->{refStrand}, $cigar, $mapq, $nm);
+						push @fragments, join(',', @bits);
+					}
+					push @cols, 'SA:Z:'.join(";", @fragments);
+				}
+			} else {
+				# only the first
+				### SA:Z:chr7,94283306,+,8000S7107M1664S,0,0;chr7,94289306,+,14195S1664M,0,0
+				push @cols, 'SA:Z:'.$repSA;
+			}
+		}
         
         push @cols, 'CO:Z:'.$marker if ('' ne $marker);
         
@@ -623,7 +650,7 @@ sub printSAM {
 }
 
 sub profileResults {
-    my ($readRef, $excludedChrsRef, $namedSVCallersRef, $orderedSVCallersRef, $noneHandlerRef, $outputSam, $seenReadIdsRef, $statisticsRef, $fhSam, $fhExclude, $fhBed) = @_;
+    my ($readRef, $excludedChrsRef, $namedSVCallersRef, $orderedSVCallersRef, $noneHandlerRef, $outputSam, $seenReadIdsRef, $statisticsRef, $fhSam, $fhExclude, $fhBed, $G_multiloci) = @_;
     
     return if (!defined $readRef);
     
@@ -636,6 +663,7 @@ sub profileResults {
     $statisticsRef->{'TOTAL'}++;
     
     # let's attempt to classify the read alignments
+	my $candidateType = '';
     my $numCandidates = scalar(@{$readRef->{candidates}});
     if (0==$numCandidates) {
         $statisticsRef->{'0-candidate'}++;
@@ -645,25 +673,31 @@ sub profileResults {
     }
     if ($numCandidates>1) {
         $statisticsRef->{'Multi-candidates'}++;
-        printProfile (*OUTP, $readRef, $readRef->{cols}, $readRef->{candidates}->[0], 'MC', '', -1);
-		printSAM ($fhSam, $readRef->{read}, $readRef->{readseq}, $readRef->{readqual}, $readRef->{readsize}, '', $readRef->{candidates}->[0], 'MC', $numCandidates, $fhBed) if (0!=$outputSam);
-        return;
+		$candidateType = 'MC';
+		if (0==$G_multiloci) {
+	        printProfile (*OUTP, $readRef, $readRef->{cols}, $readRef->{candidates}->[0], $candidateType, '', -1);
+			printSAM ($fhSam, $readRef->{read}, $readRef->{readseq}, $readRef->{readqual}, $readRef->{readsize}, '', $readRef->{candidates}->[0], $candidateType, $numCandidates, $fhBed) if (0!=$outputSam);
+        	return;
+		}
     }
 
     # there is only a single candidate!!!
     my $numFragments = scalar(@{$readRef->{candidates}->[0]});
     if (0==$numFragments) {
-        $statisticsRef->{'Single-candidate 0-fragment'}++;
+        $statisticsRef->{'Single-candidate 0-fragment'}++ if ('' eq $candidateType);
         print $fhExclude "# ", $readRef->{read}, " ", 0, " candidate\n";
-		printSAM ($fhSam, $readRef->{read}, $readRef->{readseq}, $readRef->{readqual}, $readRef->{readsize}, '', undef, '.', $numCandidates, $fhBed) if (0!=$outputSam);
+		printSAM ($fhSam, $readRef->{read}, $readRef->{readseq}, $readRef->{readqual}, $readRef->{readsize}, '', undef, $candidateType, $numCandidates, $fhBed) if (0!=$outputSam);
         return;
     }
     if (1==$numFragments) {
         # there is no SV here
-        $statisticsRef->{'Single-candidate single-fragment'}++;
-        printProfile (*OUTP, $readRef, $readRef->{cols}, $readRef->{candidates}->[0], 'SCSF', '', -1);
+		if ('' eq $candidateType) {
+	        $statisticsRef->{'Single-candidate single-fragment'}++;
+			$candidateType = 'SCSF';
+		}
+        printProfile (*OUTP, $readRef, $readRef->{cols}, $readRef->{candidates}->[0], $candidateType, '', -1);
 		# mapq = 60 given it is single-fragment
-		printSAM ($fhSam, $readRef->{read}, $readRef->{readseq}, $readRef->{readqual}, $readRef->{readsize}, '', $readRef->{candidates}->[0], 'SCSF', $numCandidates, $fhBed) if (0!=$outputSam);
+		printSAM ($fhSam, $readRef->{read}, $readRef->{readseq}, $readRef->{readqual}, $readRef->{readsize}, '', $readRef->{candidates}->[0], $candidateType, $numCandidates, $fhBed) if (0!=$outputSam);
         return;
     }
     
@@ -698,15 +732,23 @@ sub profileResults {
 
     if (0!=$multiFragments) {
         # multi-loci
-        $statisticsRef->{'Single-candidate multi-fragments multi-loci'}++;
-        # write sam file as multi-mapped (first candidate)
-        printProfile (*OUTP, $readRef, $readRef->{cols}, $readRef->{candidates}->[0], 'SCMFML', join(",", @countCigar), -1);
-		printSAM ($fhSam, $readRef->{read}, $readRef->{readseq}, $readRef->{readqual}, $readRef->{readsize}, '', $readRef->{candidates}->[0], 'SCMFML', $numCandidates, $fhBed) if (0!=$outputSam);
-        return;
+		if ('' eq $candidateType) {
+	        $statisticsRef->{'Single-candidate multi-fragments multi-loci'}++;
+			$candidateType = 'SCMFML';
+		}
+		if (0==$G_multiloci) {
+			# write sam file as multi-mapped (first candidate)
+			printProfile (*OUTP, $readRef, $readRef->{cols}, $readRef->{candidates}->[0], $candidateType, join(",", @countCigar), -1);
+			printSAM ($fhSam, $readRef->{read}, $readRef->{readseq}, $readRef->{readqual}, $readRef->{readsize}, '', $readRef->{candidates}->[0], $candidateType, $numCandidates, $fhBed) if (0!=$outputSam);
+			return;
+		}
     }
 
     # question: can be inversion and TD at the same time?
-    $statisticsRef->{'Single-candidate multi-fragments single-locus'}++;
+	if ('' eq $candidateType) {
+    	$statisticsRef->{'Single-candidate multi-fragments single-locus'}++;
+		$candidateType = 'SCMFSL';
+	}
     my $labelIndicator = 0;
     my $marker = '';
     my @SVs = ();
@@ -727,8 +769,8 @@ sub profileResults {
 	$noneHandlerRef->writeSVList($readRef, $readRef->{candidates}->[0]) if (0==scalar(@SVs));
 	
     # write potential SV candidates sam file
-    printProfile (*OUTP, $readRef, $readRef->{cols}, $readRef->{candidates}->[0], 'SCMFSL', $marker, $labelIndicator);
-	printSAM ($fhSam, $readRef->{read}, $readRef->{readseq}, $readRef->{readqual}, $readRef->{readsize}, $marker, $readRef->{candidates}->[0], 'SCMFSL', $numCandidates, $fhBed) if (0!=$outputSam);
+    printProfile (*OUTP, $readRef, $readRef->{cols}, $readRef->{candidates}->[0], $candidateType, $marker, $labelIndicator);
+	printSAM ($fhSam, $readRef->{read}, $readRef->{readseq}, $readRef->{readqual}, $readRef->{readsize}, $marker, $readRef->{candidates}->[0], $candidateType, $numCandidates, $fhBed) if (0!=$outputSam);
 }
 
 ##### internal functions

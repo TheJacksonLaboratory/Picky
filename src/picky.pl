@@ -1,8 +1,10 @@
 #!/usr/bin/env perl
-
 #####
 #
-# Picky - Structural Variants Pipeline for (ONT) long read
+# Jackson Laboratory Non-Commercial License
+# See the LICENSE file (LICENSE.txt) for license rights and limitations
+#
+# Picky - Structural Variants Pipeline for long read
 #
 # Created Aug 16, 2016
 # Copyright (c) 2016-2017  Chee-Hong WONG
@@ -51,15 +53,20 @@ use Getopt::Long;
 use hashFastq;
 use selectAlignmentMT; # threading version
 use callSV;
+use xlsToVCF;
+use PBSCluster;
 
 my $G_USAGE = "
 $0 <command> -h
 
 <command> [hashFq, selectRep, callSV]
 hashFq    : hash read uuids to friendly ids
+lastParam : Last parameters for alignment
 selectRep : select representative alignments for read
 callSV    : call structural variants
-lastParam : Last parameters for alignment
+xls2vcf   : convert Picky sv xls file to vcf
+preparepbs: chunk last fastq file and write pbs script for cluster submission
+script    : write a bash-script for single fastq processing
 ";
 
 my $command = undef;
@@ -80,11 +87,17 @@ if ('hashfq' eq $command) {
 	runSelectRepresentativeAlignments();
 } elsif ('callsv' eq $command) {
 	runCallStructuralVariants();
-} elsif ('lastcmd' eq $command) {
-	printf "-r1 -q1 -a0 -b2 -v -Q1\n"; #"-P<threads>"
+} elsif ('lastparam' eq $command) {
+	#printf "-r1 -q1 -a0 -b2 -v -Q1"; #"-P<threads>"
+	printf "-C2 -K2 -r1 -q3 -a2 -b1 -v -Q1"; #"-P<threads>"
+} elsif ('xls2vcf' eq $command) {
+	runXLStoVCF();
+} elsif ('preparepbs' eq $command) {
+	runPrepareForPBSCluster();
+} elsif ('script' eq $command) {
+	runWriteScript();
 } else {
 	print $G_USAGE;
 }
 
 exit 0;
-
