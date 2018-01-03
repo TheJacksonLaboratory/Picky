@@ -19,6 +19,8 @@
 
 use strict;
 use Getopt::Long;
+use FindBin;
+use lib $FindBin::Bin;
 use hashFastq;
 use selectAlignmentMT; # threading version
 use callSV;
