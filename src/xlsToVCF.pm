@@ -53,6 +53,7 @@ sub runXLStoVCF {
 	my $chromosomes = '';
 	my $svtypes = '';
 	my $re = $G_XLStoVCF_RE;
+	my $netIndel = 1; # report net effect as per what community expects
 	my $help = 0;
 	
 	GetOptions (
@@ -62,6 +63,7 @@ sub runXLStoVCF {
 	"re=i"     => \$re,
 	"merge=i"  => \$G_XLStoVCF_MERGE_SPAN,
 	"converge=i" => \$G_XLStoVCF_NON_CONVERGENT_SPAN,
+	"netindel!"=> \$netIndel,
 	"help!"    => \$help)
 	or die("Error in command line arguments\n$G_USAGE");
 
@@ -87,7 +89,7 @@ sub runXLStoVCF {
 	my @runs = ($run);
 	_printVCFHeaders(\@runs);
 
-	_clusterSVsEvidences(\@xlsfiles, $chromosomesRef, $svtypes, \%svtypes, $re, \@runs);
+	_clusterSVsEvidences(\@xlsfiles, $chromosomesRef, $svtypes, \%svtypes, $re, \@runs, $netIndel);
 }
 
 sub _printVCFHeaders {
@@ -536,7 +538,7 @@ sub _reportClusteredSVs {
 }
 
 sub _clusterSVsEvidences {
-    my ($filesRef, $chromosomesRef, $svtypes, $svtypesRef, $re, $runsRef) = @_;
+    my ($filesRef, $chromosomesRef, $svtypes, $svtypesRef, $re, $runsRef, $netIndel) = @_;
 
 	my %svByTypes = ();
     foreach my $file (@{$filesRef}) {
@@ -614,20 +616,33 @@ sub _clusterSVsEvidences {
 				$svByTypes{$svGroupType} = [] if (!exists $svByTypes{$svGroupType});
 				push @{$svByTypes{$svGroupType}}, \%item;
             } elsif ('INDEL' eq $item{SVType}) {
-				# TODO: confirm how community interpret this class!
-                if ($item{sDiff}>$item{qDiff}) {
-                    # net deletion against reference
-                    $item{SVEnd} -= ($item{sDiff}-$item{qDiff});
+				if (0!=$netIndel) {
+					if ($item{sDiff}>$item{qDiff}) {
+						# net deletion against reference
+						$item{SVEnd} -= ($item{sDiff}-$item{qDiff});
+						$svGroupType = 'DEL';
+						$svByTypes{$svGroupType} = [] if (!exists $svByTypes{$svGroupType});
+						push @{$svByTypes{$svGroupType}}, \%item;
+					} elsif ($item{sDiff}<$item{qDiff}) {
+						# net insertion against reference
+						$item{SVSpan} = ($item{qDiff}-$item{sDiff});
+						$svGroupType = 'INS';
+						$svByTypes{$svGroupType} = [] if (!exists $svByTypes{$svGroupType});
+						push @{$svByTypes{$svGroupType}}, \%item;
+					}
+				} else {
+					# the span has two events... deletion follows by insertion or insertion follows by deletion
+					# keep the span as the deletion
 					$svGroupType = 'DEL';
 					$svByTypes{$svGroupType} = [] if (!exists $svByTypes{$svGroupType});
 					push @{$svByTypes{$svGroupType}}, \%item;
-                } elsif ($item{sDiff}<$item{qDiff}) {
-                    # net insertion against reference
-                    $item{SVSpan} = ($item{qDiff}-$item{sDiff});
+					# report the exact inserted length
+					my $insItemRef = dclone(\%item);
+					$insItemRef->{SVSpan} = $insItemRef->{qDiff};
 					$svGroupType = 'INS';
 					$svByTypes{$svGroupType} = [] if (!exists $svByTypes{$svGroupType});
-					push @{$svByTypes{$svGroupType}}, \%item;
-                }
+					push @{$svByTypes{$svGroupType}}, $insItemRef;
+				}
             } elsif ('INV' eq $item{SVType}) {
 				$svGroupType = 'INV';
 				$svByTypes{$svGroupType} = [] if (!exists $svByTypes{$svGroupType});
