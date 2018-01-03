@@ -169,7 +169,7 @@ sub _loadTemplate {
 	my $destRef = $preLinesRef;
 	while (<INFILE>) {
 		chomp();
-		if (lc($_) eq 'export RUN=') {
+		if (lc($_) eq 'export run=') {
 			$destRef = $postLinesRef;
 		} else {
 			push @{$destRef}, $_;
