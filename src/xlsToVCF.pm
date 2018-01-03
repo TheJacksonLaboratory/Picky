@@ -97,7 +97,7 @@ sub _printVCFHeaders {
 
     print '##fileformat=VCFv4.1', "\n";
 	my($day, $month, $year) = (localtime)[3,4,5];
-	my $fileDate = sprintf("%04d%02d%02d", $year+1900, $month, $day);
+	my $fileDate = sprintf("%04d%02d%02d", $year+1900, $month+1, $day);
     print '##fileDate=', $fileDate, "\n";
     print '##ALT=<ID=DEL,Description="Deletion">', "\n";
     print '##ALT=<ID=DUP,Description="Duplication">', "\n";
@@ -258,7 +258,7 @@ sub _reportClusteredSpanSVs {
             push @infos, 'IMPRECISE';
         }
         push @infos, 'SVMETHOD=picky';
-        push @infos, 'END='.$repEnd;
+        push @infos, 'END='.('INS' eq $memberRef->{SVType} ? $repStart : $repEnd);
         push @infos, 'SVTYPE='.$svGroupType;
         push @infos, 'RE='.$numRNames;
         push @infos, 'RNAMES='.join(",", @rnames);
