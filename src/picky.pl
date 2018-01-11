@@ -38,6 +38,12 @@ callSV    : call structural variants
 xls2vcf   : convert Picky sv xls file to vcf
 preparepbs: chunk last fastq file and write pbs script for cluster submission
 script    : write a bash-script for single fastq processing
+
+
+      License = JACKSON LABORATORY NON-COMMERCIAL LICENSE AGREEMENT
+                https://github.com/TheJacksonLaboratory/Picky/blob/master/LICENSE.md
+Documentation = https://github.com/TheJacksonLaboratory/Picky/wiki
+   Repository = https://github.com/TheJacksonLaboratory/Picky/
 ";
 
 my $command = undef;
