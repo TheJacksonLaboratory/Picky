@@ -105,7 +105,7 @@ sub runCallStructuralVariants {
 	die "$G_USAGE" if ($help);
 	
 	die "Please specify the prefix for output files\n$G_USAGE" if (!defined $oprefix || '' eq $oprefix);
-	die "Please specify the fastq files\n$G_USAGE" if (!defined $fqfile || '' eq $fqfile);
+	die "Please specify the fastq files\n$G_USAGE" if ((!defined $fqfile || '' eq $fqfile) && (0!=$outputSam));
 	
 	my %svParameters = ();
 	$svParameters{'_ctlc_min_sdiff'} = 1000000000;  # exclude from this study
