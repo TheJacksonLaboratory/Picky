@@ -26,6 +26,7 @@ use selectAlignmentMT; # threading version
 use callSV;
 use xlsToVCF;
 use PBSCluster;
+use samToAlign;
 
 my $G_USAGE = "
 $0 <command> -h
@@ -36,6 +37,7 @@ lastParam : Last parameters for alignment
 selectRep : select representative alignments for read
 callSV    : call structural variants
 xls2vcf   : convert Picky sv xls file to vcf
+sam2align : convert sam to align format
 preparepbs: chunk last fastq file and write pbs script for cluster submission
 script    : write a bash-script for single fastq processing
 
@@ -69,6 +71,8 @@ if ('hashfq' eq $command) {
 	printf "-C2 -K2 -r1 -q3 -a2 -b1 -v -Q1"; #"-P<threads>"
 } elsif ('xls2vcf' eq $command) {
 	runXLStoVCF();
+} elsif ('sam2align' eq $command) {
+	runSamToAlign();
 } elsif ('preparepbs' eq $command) {
 	runPrepareForPBSCluster();
 } elsif ('script' eq $command) {
